@@ -105,7 +105,7 @@ public class TestCloudObjectsSelector extends HoodieClientTestHarness {
   @ParameterizedTest
   @ValueSource(classes = {CloudObjectsSelector.class})
   public void testFileAttributesFromRecordShouldReturnsExpectOutput(Class<?> clazz)
-      throws IOException {
+          throws Exception {
 
     CloudObjectsSelector selector =
         (CloudObjectsSelector) ReflectionUtils.loadClass(clazz.getName(), props);

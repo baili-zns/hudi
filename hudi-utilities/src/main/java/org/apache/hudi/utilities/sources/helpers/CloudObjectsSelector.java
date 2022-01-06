@@ -108,7 +108,7 @@ public class CloudObjectsSelector {
    * @param record of object event
    * @return map of file attribute
    */
-  protected Map<String, Object> getFileAttributesFromRecord(JSONObject record) throws UnsupportedEncodingException {
+  protected Map<String, Object> getFileAttributesFromRecord(JSONObject record) throws Exception {
     Map<String, Object> fileRecord = new HashMap<>();
     String eventTimeStr = record.getString(S3_MODEL_EVENT_TIME);
     long eventTime =
