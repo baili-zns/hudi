@@ -127,7 +127,11 @@ public abstract class AbstractStreamWriteFunction<I>
   public void initializeState(FunctionInitializationContext context) throws Exception {
     this.taskID = getRuntimeContext().getIndexOfThisSubtask();
     this.metaClient = StreamerUtil.createMetaClient(this.config);
-    this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+    try {//动态初始无schema，会抛错
+      this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
     this.writeStatuses = new ArrayList<>();
     this.writeMetadataState = context.getOperatorStateStore().getListState(
         new ListStateDescriptor<>(
