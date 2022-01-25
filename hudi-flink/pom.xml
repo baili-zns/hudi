@@ -339,5 +339,10 @@
       <version>${flink.version}</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.hito.econ.flink.common</groupId>
+      <artifactId>flink-table-commons</artifactId>
+      <version>1.0.0-SNAPSHOT</version>
+</dependency>
   </dependencies>
 </project>

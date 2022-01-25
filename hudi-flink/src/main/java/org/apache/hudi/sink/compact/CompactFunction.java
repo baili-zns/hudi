@@ -41,81 +41,97 @@ import java.util.List;
  * In order to execute scalable, the input should shuffle by the compact event {@link CompactionPlanEvent}.
  */
 public class CompactFunction extends ProcessFunction<CompactionPlanEvent, CompactionCommitEvent> {
-  private static final Logger LOG = LoggerFactory.getLogger(CompactFunction.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CompactFunction.class);
 
-  /**
-   * Config options.
-   */
-  private final Configuration conf;
+    /**
+     * Config options.
+     */
+    private final Configuration conf;
 
-  /**
-   * Write Client.
-   */
-  private transient HoodieFlinkWriteClient writeClient;
+    /**
+     * Write Client.
+     */
+    private transient HoodieFlinkWriteClient writeClient;
 
-  /**
-   * Whether to execute compaction asynchronously.
-   */
-  private final boolean asyncCompaction;
+    /**
+     * Whether to execute compaction asynchronously.
+     */
+    private final boolean asyncCompaction;
 
-  /**
-   * Id of current subtask.
-   */
-  private int taskID;
+    /**
+     * Id of current subtask.
+     */
+    private int taskID;
 
-  /**
-   * Executor service to execute the compaction task.
-   */
-  private transient NonThrownExecutor executor;
+    /**
+     * Executor service to execute the compaction task.
+     */
+    private transient NonThrownExecutor executor;
 
-  public CompactFunction(Configuration conf) {
-    this.conf = conf;
-    this.asyncCompaction = StreamerUtil.needsAsyncCompaction(conf);
-  }
-
-  @Override
-  public void open(Configuration parameters) throws Exception {
-    this.taskID = getRuntimeContext().getIndexOfThisSubtask();
-    this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
-    if (this.asyncCompaction) {
-      this.executor = NonThrownExecutor.builder(LOG).build();
+    public CompactFunction(Configuration conf) {
+        this.conf = conf;
+        this.asyncCompaction = StreamerUtil.needsAsyncCompaction(conf);
     }
-  }
 
-  @Override
-  public void processElement(CompactionPlanEvent event, Context context, Collector<CompactionCommitEvent> collector) throws Exception {
-    final String instantTime = event.getCompactionInstantTime();
-    final CompactionOperation compactionOperation = event.getOperation();
-    if (asyncCompaction) {
-      // executes the compaction task asynchronously to not block the checkpoint barrier propagate.
-      executor.execute(
-          () -> doCompaction(instantTime, compactionOperation, collector),
-          (errMsg, t) -> collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), taskID)),
-          "Execute compaction for instant %s from task %d", instantTime, taskID);
-    } else {
-      // executes the compaction task synchronously for batch mode.
-      LOG.info("Execute compaction for instant {} from task {}", instantTime, taskID);
-      doCompaction(instantTime, compactionOperation, collector);
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        this.taskID = getRuntimeContext().getIndexOfThisSubtask();
+        try {
+            this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        if (this.asyncCompaction) {
+            this.executor = NonThrownExecutor.builder(LOG).build();
+        }
     }
-  }
 
-  private void doCompaction(String instantTime, CompactionOperation compactionOperation, Collector<CompactionCommitEvent> collector) throws IOException {
-    HoodieFlinkMergeOnReadTableCompactor compactor = new HoodieFlinkMergeOnReadTableCompactor();
-    List<WriteStatus> writeStatuses = compactor.compact(
-        new HoodieFlinkCopyOnWriteTable<>(
-            writeClient.getConfig(),
-            writeClient.getEngineContext(),
-            writeClient.getHoodieTable().getMetaClient()),
-        writeClient.getHoodieTable().getMetaClient(),
-        writeClient.getConfig(),
-        compactionOperation,
-        instantTime,
-        writeClient.getHoodieTable().getTaskContextSupplier());
-    collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), writeStatuses, taskID));
-  }
+    @Override
+    public void processElement(CompactionPlanEvent event, Context context, Collector<CompactionCommitEvent> collector) throws Exception {
+        final String instantTime = event.getCompactionInstantTime();
+        final CompactionOperation compactionOperation = event.getOperation();
+        if (event instanceof CompactionPlanEventEx) {
+            Configuration configuration = ((CompactionPlanEventEx) event).getConfiguration();
+            if (configuration != null && !configuration.equals(this.conf)) {
+                if (this.writeClient != null) {
+                    this.writeClient.cleanHandlesGracefully();
+                    this.writeClient.close();
+                }
+                this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
+            }
+        }
+        if (asyncCompaction) {
+            // executes the compaction task asynchronously to not block the checkpoint barrier propagate.
+            executor.execute(
+                    () -> doCompaction(instantTime, compactionOperation, collector),
+//                    (errMsg, t) -> collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), taskID)),
+                    (errMsg, t) -> collector.collect(new CompactionCommitEventEx(instantTime, compactionOperation.getFileId(), taskID, this.conf)),
+                    "Execute compaction for instant %s from task %d", instantTime, taskID);
+        } else {
+            // executes the compaction task synchronously for batch mode.
+            LOG.info("Execute compaction for instant {} from task {}", instantTime, taskID);
+            doCompaction(instantTime, compactionOperation, collector);
+        }
+    }
 
-  @VisibleForTesting
-  public void setExecutor(NonThrownExecutor executor) {
-    this.executor = executor;
-  }
+    private void doCompaction(String instantTime, CompactionOperation compactionOperation, Collector<CompactionCommitEvent> collector) throws IOException {
+        HoodieFlinkMergeOnReadTableCompactor compactor = new HoodieFlinkMergeOnReadTableCompactor();
+        List<WriteStatus> writeStatuses = compactor.compact(
+                new HoodieFlinkCopyOnWriteTable<>(
+                        writeClient.getConfig(),
+                        writeClient.getEngineContext(),
+                        writeClient.getHoodieTable().getMetaClient()),
+                writeClient.getHoodieTable().getMetaClient(),
+                writeClient.getConfig(),
+                compactionOperation,
+                instantTime,
+                writeClient.getHoodieTable().getTaskContextSupplier());
+//    collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), writeStatuses, taskID));
+        collector.collect(new CompactionCommitEventEx(instantTime, compactionOperation.getFileId(), writeStatuses, taskID, this.conf));
+    }
+
+    @VisibleForTesting
+    public void setExecutor(NonThrownExecutor executor) {
+        this.executor = executor;
+    }
 }

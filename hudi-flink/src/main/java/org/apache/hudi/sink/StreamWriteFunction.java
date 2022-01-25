@@ -18,6 +18,9 @@
 
 package org.apache.hudi.sink;
 
+import cn.hutool.core.util.StrUtil;
+import com.hito.econ.flink.common.model.HoodieRecordWithSchema;
+import org.apache.flink.table.types.logical.RowType;
 import org.apache.hudi.client.WriteStatus;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieOperation;
@@ -33,6 +36,7 @@ import org.apache.hudi.index.HoodieIndex;
 import org.apache.hudi.sink.common.AbstractStreamWriteFunction;
 import org.apache.hudi.sink.event.WriteMetadataEvent;
 import org.apache.hudi.table.action.commit.FlinkWriteHelper;
+import org.apache.hudi.util.AvroSchemaConverter;
 import org.apache.hudi.util.StreamerUtil;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -94,6 +98,8 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
 
   private static final Logger LOG = LoggerFactory.getLogger(StreamWriteFunction.class);
 
+  private RowType rowType;
+  private List<String> primaryKeyColumnNames;
   /**
    * Write buffer as buckets for a checkpoint. The key is bucket ID.
    */
@@ -132,6 +138,24 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
 
   @Override
   public void processElement(I value, ProcessFunction<I, Object>.Context ctx, Collector<Object> out) throws Exception {
+    if (value instanceof HoodieRecordWithSchema) {
+      HoodieRecordWithSchema hoodieRecordWithSchema = (HoodieRecordWithSchema) value;
+      if (!hoodieRecordWithSchema.getRowType().equals(this.rowType) || !hoodieRecordWithSchema.getPrimaryKeyColumnNames().equals(this.primaryKeyColumnNames)) {
+        this.config.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, AvroSchemaConverter.convertToSchema(hoodieRecordWithSchema.getRowType()).toString());
+        this.config.setString(FlinkOptions.RECORD_KEY_FIELD, StrUtil.join(",", hoodieRecordWithSchema.getPrimaryKeyColumnNames()));
+        LOG.warn("RowType {} has changed to {}.\n RECORD_KEY_FIELD {} has changed to {}.",
+                this.rowType,
+                hoodieRecordWithSchema.getRowType(),
+                this.primaryKeyColumnNames,
+                hoodieRecordWithSchema.getPrimaryKeyColumnNames()
+        );
+        this.rowType = hoodieRecordWithSchema.getRowType();
+        this.close();
+        this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+        //将变化发往下游compact和clean任务
+        out.collect(this.config);
+      }
+    }
     bufferRecord((HoodieRecord<?>) value);
   }
 

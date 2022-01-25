@@ -18,6 +18,8 @@
 
 package org.apache.hudi.sink.transform;
 
+import com.hito.econ.flink.common.model.HoodieRecordWithSchema;
+import com.hito.econ.flink.common.model.RowDataWithSchema;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieOperation;
 import org.apache.hudi.common.model.HoodieRecord;
@@ -26,6 +28,7 @@ import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.keygen.KeyGenerator;
 import org.apache.hudi.keygen.factory.HoodieAvroKeyGeneratorFactory;
 import org.apache.hudi.sink.utils.PayloadCreation;
+import org.apache.hudi.util.AvroSchemaConverter;
 import org.apache.hudi.util.RowDataToAvroConverters;
 import org.apache.hudi.util.StreamerUtil;
 
@@ -44,73 +47,86 @@ import static org.apache.hudi.util.StreamerUtil.flinkConf2TypedProperties;
  * Function that transforms RowData to HoodieRecord.
  */
 public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
-    extends RichMapFunction<I, O> {
-  /**
-   * Row type of the input.
-   */
-  private final RowType rowType;
+        extends RichMapFunction<I, O> {
+    /**
+     * Row type of the input.
+     */
+    private RowType rowType;
 
-  /**
-   * Avro schema of the input.
-   */
-  private transient Schema avroSchema;
+    /**
+     * Avro schema of the input.
+     */
+    private transient Schema avroSchema;
 
-  /**
-   * RowData to Avro record converter.
-   */
-  private transient RowDataToAvroConverters.RowDataToAvroConverter converter;
+    /**
+     * RowData to Avro record converter.
+     */
+    private transient RowDataToAvroConverters.RowDataToAvroConverter converter;
 
-  /**
-   * HoodieKey generator.
-   */
-  private transient KeyGenerator keyGenerator;
+    /**
+     * HoodieKey generator.
+     */
+    private transient KeyGenerator keyGenerator;
 
-  /**
-   * Utilities to create hoodie pay load instance.
-   */
-  private transient PayloadCreation payloadCreation;
+    /**
+     * Utilities to create hoodie pay load instance.
+     */
+    private transient PayloadCreation payloadCreation;
 
-  /**
-   * Config options.
-   */
-  private final Configuration config;
+    /**
+     * Config options.
+     */
+    private final Configuration config;
 
-  public RowDataToHoodieFunction(RowType rowType, Configuration config) {
-    this.rowType = rowType;
-    this.config = config;
-  }
+    public RowDataToHoodieFunction(RowType rowType, Configuration config) {
+        this.rowType = rowType;
+        this.config = config;
+    }
 
-  @Override
-  public void open(Configuration parameters) throws Exception {
-    super.open(parameters);
-    this.avroSchema = StreamerUtil.getSourceSchema(this.config);
-    this.converter = RowDataToAvroConverters.createConverter(this.rowType);
-    this.keyGenerator =
-        HoodieAvroKeyGeneratorFactory
-            .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
-    this.payloadCreation = PayloadCreation.instance(config);
-  }
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        super.open(parameters);
+        this.avroSchema = StreamerUtil.getSourceSchema(this.config);
+        this.converter = RowDataToAvroConverters.createConverter(this.rowType);
+        this.keyGenerator =
+                HoodieAvroKeyGeneratorFactory
+                        .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
+        this.payloadCreation = PayloadCreation.instance(config);
+    }
 
-  @SuppressWarnings("unchecked")
-  @Override
-  public O map(I i) throws Exception {
-    return (O) toHoodieRecord(i);
-  }
+    @SuppressWarnings("unchecked")
+    @Override
+    public O map(I i) throws Exception {
+        return (O) toHoodieRecord(i);
+    }
 
-  /**
-   * Converts the give record to a {@link HoodieRecord}.
-   *
-   * @param record The input record
-   * @return HoodieRecord based on the configuration
-   * @throws IOException if error occurs
-   */
-  @SuppressWarnings("rawtypes")
-  private HoodieRecord toHoodieRecord(I record) throws Exception {
-    GenericRecord gr = (GenericRecord) this.converter.convert(this.avroSchema, record);
-    final HoodieKey hoodieKey = keyGenerator.getKey(gr);
+    /**
+     * Converts the give record to a {@link HoodieRecord}.
+     *
+     * @param record The input record
+     * @return HoodieRecord based on the configuration
+     * @throws IOException if error occurs
+     */
+    @SuppressWarnings("rawtypes")
+    private HoodieRecord toHoodieRecord(I record) throws Exception {
+        GenericRecord gr = (GenericRecord) this.converter.convert(this.avroSchema, record);
+        final HoodieKey hoodieKey = keyGenerator.getKey(gr);
 
-    HoodieRecordPayload payload = payloadCreation.createPayload(gr);
-    HoodieOperation operation = HoodieOperation.fromValue(record.getRowKind().toByteValue());
-    return new HoodieRecord<>(hoodieKey, payload, operation);
-  }
+        HoodieRecordPayload payload = payloadCreation.createPayload(gr);
+        HoodieOperation operation = HoodieOperation.fromValue(record.getRowKind().toByteValue());
+        if (record instanceof RowDataWithSchema) {
+            if (!((RowDataWithSchema) record).getRowType().equals(this.rowType)) {
+                this.rowType = ((RowDataWithSchema) record).getRowType();
+                this.avroSchema = AvroSchemaConverter.convertToSchema(this.rowType);
+                this.converter = RowDataToAvroConverters.createConverter(this.rowType);
+                this.config.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, this.avroSchema.toString());
+                this.keyGenerator =
+                        HoodieAvroKeyGeneratorFactory
+                                .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
+                this.payloadCreation = PayloadCreation.instance(this.config);
+                return new HoodieRecordWithSchema(hoodieKey, payload, operation, (RowDataWithSchema) record);
+            }
+        }
+        return new HoodieRecord<>(hoodieKey, payload, operation);
+    }
 }

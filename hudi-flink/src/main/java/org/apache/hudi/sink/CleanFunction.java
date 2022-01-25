@@ -21,6 +21,8 @@ package org.apache.hudi.sink;
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.sink.utils.NonThrownExecutor;
+import org.apache.hudi.util.CompactionUtil;
+import org.apache.hudi.util.FlinkTables;
 import org.apache.hudi.util.StreamerUtil;
 
 import org.apache.flink.api.common.functions.AbstractRichFunction;
@@ -41,68 +43,101 @@ import org.slf4j.LoggerFactory;
  * The cleaning task never expects to throw but only log.
  */
 public class CleanFunction<T> extends AbstractRichFunction
-    implements SinkFunction<T>, CheckpointedFunction, CheckpointListener {
-  private static final Logger LOG = LoggerFactory.getLogger(CleanFunction.class);
+        implements SinkFunction<T>, CheckpointedFunction, CheckpointListener {
+    private static final Logger LOG = LoggerFactory.getLogger(CleanFunction.class);
 
-  private final Configuration conf;
+    private Configuration conf;
 
-  protected HoodieFlinkWriteClient writeClient;
+    protected HoodieFlinkWriteClient writeClient;
 
-  private NonThrownExecutor executor;
+    private NonThrownExecutor executor;
 
-  private volatile boolean isCleaning;
+    private volatile boolean isCleaning;
 
-  public CleanFunction(Configuration conf) {
-    this.conf = conf;
-  }
-
-  @Override
-  public void open(Configuration parameters) throws Exception {
-    super.open(parameters);
-    if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED)) {
-      // do not use the remote filesystem view because the async cleaning service
-      // local timeline is very probably to fall behind with the remote one.
-      this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext(), false);
-      this.executor = NonThrownExecutor.builder(LOG).build();
+    public CleanFunction(Configuration conf) {
+        this.conf = conf;
     }
-  }
 
-  @Override
-  public void notifyCheckpointComplete(long l) throws Exception {
-    if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED) && isCleaning) {
-      executor.execute(() -> {
-        try {
-          this.writeClient.waitForCleaningFinish();
-        } finally {
-          // ensure to switch the isCleaning flag
-          this.isCleaning = false;
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        super.open(parameters);
+        if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED)) {
+            // do not use the remote filesystem view because the async cleaning service
+            // local timeline is very probably to fall behind with the remote one.
+            try {
+                this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext(), false);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            this.executor = NonThrownExecutor.builder(LOG).build();
         }
-      }, "wait for cleaning finish");
     }
-  }
 
-  @Override
-  public void snapshotState(FunctionSnapshotContext context) throws Exception {
-    if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED) && !isCleaning) {
-      try {
-        this.writeClient.startAsyncCleaning();
-        this.isCleaning = true;
-      } catch (Throwable throwable) {
-        // catch the exception to not affect the normal checkpointing
-        LOG.warn("Error while start async cleaning", throwable);
-      }
+    @Override
+    public void notifyCheckpointComplete(long l) throws Exception {
+        if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED) && isCleaning) {
+            executor.execute(() -> {
+                try {
+                    this.writeClient.waitForCleaningFinish();
+                } finally {
+                    // ensure to switch the isCleaning flag
+                    this.isCleaning = false;
+                }
+            }, "wait for cleaning finish");
+        }
     }
-  }
 
-  @Override
-  public void initializeState(FunctionInitializationContext context) throws Exception {
-    // no operation
-  }
-
-  @Override
-  public void close() throws Exception {
-    if (this.writeClient != null) {
-      this.writeClient.close();
+    /**
+     * Writes the given value to the sink. This function is called for every record.
+     *
+     * <p>You have to override this method when implementing a {@code SinkFunction}, this is a
+     * {@code default} method for backward compatibility with the old-style method only.
+     *
+     * @param value   The input record.
+     * @param context Additional context about the input record.
+     * @throws Exception This method may throw exceptions. Throwing an exception will cause the
+     *                   operation to fail and may trigger recovery.
+     */
+    @Override
+    public void invoke(T value, Context context) throws Exception {
+        SinkFunction.super.invoke(value, context);
+        if (value instanceof Configuration) {
+            this.conf = (Configuration) value;
+            if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED)) {
+                // do not use the remote filesystem view because the async cleaning service
+                // local timeline is very probably to fall behind with the remote one.
+                if (this.writeClient != null) {
+                    this.writeClient.cleanHandlesGracefully();
+                    this.writeClient.close();
+                }
+                this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext(), false);
+//                this.executor = NonThrownExecutor.builder(LOG).build();
+            }
+        }
     }
-  }
+
+    @Override
+    public void snapshotState(FunctionSnapshotContext context) throws Exception {
+        if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED) && !isCleaning) {
+            try {
+                this.writeClient.startAsyncCleaning();
+                this.isCleaning = true;
+            } catch (Throwable throwable) {
+                // catch the exception to not affect the normal checkpointing
+                LOG.warn("Error while start async cleaning", throwable);
+            }
+        }
+    }
+
+    @Override
+    public void initializeState(FunctionInitializationContext context) throws Exception {
+        // no operation
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (this.writeClient != null) {
+            this.writeClient.close();
+        }
+    }
 }
