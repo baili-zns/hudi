@@ -25,6 +25,7 @@ import org.apache.hudi.common.table.timeline.HoodieTimeline;
 import org.apache.hudi.common.util.CompactionUtils;
 import org.apache.hudi.common.util.Option;
 import org.apache.hudi.configuration.FlinkOptions;
+import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.table.HoodieFlinkTable;
 import org.apache.hudi.util.CompactionUtil;
 import org.apache.hudi.util.FlinkTables;
@@ -74,8 +75,8 @@ public class CompactionPlanOperator extends AbstractStreamOperator<CompactionPla
             // these instants are in priority for scheduling task because the compaction instants are
             // scheduled from earliest(FIFO sequence).
             CompactionUtil.rollbackCompaction(table);
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (HoodieException e) {
+            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
         }
     }
 

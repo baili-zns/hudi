@@ -91,8 +91,8 @@ public class CompactionCommitSink extends CleanFunction<CompactionCommitEvent> {
             try {
                 this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
                 this.table = this.writeClient.getHoodieTable();
-            } catch (Exception e) {
-                e.printStackTrace();
+            }catch (HoodieException e) {
+                LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
             }
         }
         this.commitBuffer = new HashMap<>();

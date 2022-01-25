@@ -21,6 +21,7 @@ package org.apache.hudi.sink.compact;
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.client.WriteStatus;
 import org.apache.hudi.common.model.CompactionOperation;
+import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.sink.utils.NonThrownExecutor;
 import org.apache.hudi.table.HoodieFlinkCopyOnWriteTable;
 import org.apache.hudi.table.action.compact.HoodieFlinkMergeOnReadTableCompactor;
@@ -78,8 +79,8 @@ public class CompactFunction extends ProcessFunction<CompactionPlanEvent, Compac
         this.taskID = getRuntimeContext().getIndexOfThisSubtask();
         try {
             this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (HoodieException e) {
+            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
         }
         if (this.asyncCompaction) {
             this.executor = NonThrownExecutor.builder(LOG).build();

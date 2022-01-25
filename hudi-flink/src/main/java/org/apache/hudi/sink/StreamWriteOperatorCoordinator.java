@@ -18,10 +18,13 @@
 
 package org.apache.hudi.sink;
 
-import com.hito.econ.flink.common.model.WriteMetadataEventEx;
-import com.hito.econ.flink.common.utils.StringUtil;
 import org.apache.avro.Schema;
-import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
+import org.apache.flink.runtime.operators.coordination.OperatorEvent;
+import org.apache.flink.runtime.operators.coordination.TaskNotRunningException;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.client.WriteStatus;
@@ -39,32 +42,19 @@ import org.apache.hudi.configuration.OptionsResolver;
 import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.sink.event.CommitAckEvent;
 import org.apache.hudi.sink.event.WriteMetadataEvent;
+import org.apache.hudi.sink.event.WriteMetadataEventEx;
 import org.apache.hudi.sink.utils.HiveSyncContext;
 import org.apache.hudi.sink.utils.NonThrownExecutor;
 import org.apache.hudi.util.AvroSchemaConverter;
 import org.apache.hudi.util.CompactionUtil;
 import org.apache.hudi.util.StreamerUtil;
-
-import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.jobgraph.OperatorID;
-import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
-import org.apache.flink.runtime.operators.coordination.OperatorEvent;
-import org.apache.flink.runtime.operators.coordination.TaskNotRunningException;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
@@ -169,21 +159,26 @@ public class StreamWriteOperatorCoordinator
         reset();
         this.gateways = new SubtaskGateway[this.parallelism];
         // init table, create if not exists.
-        this.metaClient = initTableIfNotExists(this.conf);
-        // the write client must create after the table creation
-        this.writeClient = StreamerUtil.createWriteClient(conf);
-        this.tableState = TableState.create(conf);
+        try {
+            this.metaClient = initTableIfNotExists(this.conf);
+            // the write client must create after the table creation
+            this.writeClient = StreamerUtil.createWriteClient(conf);
+            this.tableState = TableState.create(conf);
+            // start the executor if required
+            if (tableState.syncHive) {
+                initHiveSync();
+            }
+            if (tableState.syncMetadata) {
+                initMetadataSync();
+            }
+        } catch (HoodieException e) {
+            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+        }
         // start the executor
         this.executor = NonThrownExecutor.builder(LOG)
                 .exceptionHook((errMsg, t) -> this.context.failJob(new HoodieException(errMsg, t)))
                 .waitForTasksFinish(true).build();
-        // start the executor if required
-        if (tableState.syncHive) {
-            initHiveSync();
-        }
-        if (tableState.syncMetadata) {
-            initMetadataSync();
-        }
+
     }
 
     @Override
@@ -335,14 +330,16 @@ public class StreamWriteOperatorCoordinator
     }
 
     private void startInstant() {
-        final String instant = HoodieActiveTimeline.createNewInstantTime();
-        // put the assignment in front of metadata generation,
-        // because the instant request from write task is asynchronous.
-        this.instant = instant;
-        this.writeClient.startCommitWithTime(instant, tableState.commitAction);
-        this.metaClient.getActiveTimeline().transitionRequestedToInflight(tableState.commitAction, this.instant);
-        LOG.info("Create instant [{}] for table [{}] with type [{}]", this.instant,
-                this.conf.getString(FlinkOptions.TABLE_NAME), conf.getString(FlinkOptions.TABLE_TYPE));
+        if (this.writeClient != null && this.metaClient != null) {
+            final String instant = HoodieActiveTimeline.createNewInstantTime();
+            // put the assignment in front of metadata generation,
+            // because the instant request from write task is asynchronous.
+            this.instant = instant;
+            this.writeClient.startCommitWithTime(instant, tableState.commitAction);
+            this.metaClient.getActiveTimeline().transitionRequestedToInflight(tableState.commitAction, this.instant);
+            LOG.info("Create instant [{}] for table [{}] with type [{}]", this.instant,
+                    this.conf.getString(FlinkOptions.TABLE_NAME), conf.getString(FlinkOptions.TABLE_TYPE));
+        }
     }
 
     /**
@@ -368,7 +365,9 @@ public class StreamWriteOperatorCoordinator
             // starts a new instant
             startInstant();
             // upgrade downgrade
-            this.writeClient.upgradeDowngrade(this.instant);
+            if (this.writeClient != null) {
+                this.writeClient.upgradeDowngrade(this.instant);
+            }
         }, "initialize instant %s", instant);
     }
 
@@ -492,6 +491,12 @@ public class StreamWriteOperatorCoordinator
                 // the write client must create after the table creation
                 this.writeClient = StreamerUtil.createWriteClient(conf);
                 this.tableState = TableState.create(conf);
+                if (tableState.syncHive) {
+                    initHiveSync();
+                }
+                if (tableState.syncMetadata) {
+                    initMetadataSync();
+                }
             }
         }
         doCommit(instant, writeResults);

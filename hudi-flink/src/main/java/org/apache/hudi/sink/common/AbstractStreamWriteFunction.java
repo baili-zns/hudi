@@ -23,6 +23,7 @@ import org.apache.hudi.client.WriteStatus;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.util.ValidationUtils;
 import org.apache.hudi.configuration.FlinkOptions;
+import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.sink.StreamWriteOperatorCoordinator;
 import org.apache.hudi.sink.event.CommitAckEvent;
 import org.apache.hudi.sink.event.WriteMetadataEvent;
@@ -42,6 +43,7 @@ import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -126,11 +128,12 @@ public abstract class AbstractStreamWriteFunction<I>
   @Override
   public void initializeState(FunctionInitializationContext context) throws Exception {
     this.taskID = getRuntimeContext().getIndexOfThisSubtask();
-    this.metaClient = StreamerUtil.createMetaClient(this.config);
     try {//动态初始无schema，会抛错
+      this.metaClient = StreamerUtil.createMetaClient(this.config);
       this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
-    } catch (Exception e) {
-      e.printStackTrace();
+      this.currentInstant = lastPendingInstant();
+    } catch (HoodieException e) {
+      LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
     }
     this.writeStatuses = new ArrayList<>();
     this.writeMetadataState = context.getOperatorStateStore().getListState(
@@ -139,7 +142,6 @@ public abstract class AbstractStreamWriteFunction<I>
             TypeInformation.of(WriteMetadataEvent.class)
         ));
 
-    this.currentInstant = lastPendingInstant();
     if (context.isRestored()) {
       restoreWriteMetadata();
     } else {

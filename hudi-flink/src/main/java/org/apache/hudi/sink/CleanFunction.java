@@ -20,6 +20,7 @@ package org.apache.hudi.sink;
 
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.configuration.FlinkOptions;
+import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.sink.utils.NonThrownExecutor;
 import org.apache.hudi.util.CompactionUtil;
 import org.apache.hudi.util.FlinkTables;
@@ -66,8 +67,8 @@ public class CleanFunction<T> extends AbstractRichFunction
             // local timeline is very probably to fall behind with the remote one.
             try {
                 this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext(), false);
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (HoodieException e) {
+                LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
             }
             this.executor = NonThrownExecutor.builder(LOG).build();
         }

@@ -19,7 +19,6 @@
 package org.apache.hudi.sink;
 
 import cn.hutool.core.util.StrUtil;
-import com.hito.econ.flink.common.model.HoodieRecordWithSchema;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.hudi.client.WriteStatus;
 import org.apache.hudi.common.model.HoodieKey;
@@ -33,6 +32,7 @@ import org.apache.hudi.common.util.ValidationUtils;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.index.HoodieIndex;
+import org.apache.hudi.model.HoodieRecordWithSchema;
 import org.apache.hudi.sink.common.AbstractStreamWriteFunction;
 import org.apache.hudi.sink.event.WriteMetadataEvent;
 import org.apache.hudi.table.action.commit.FlinkWriteHelper;
@@ -155,6 +155,7 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
                 this.primaryKeyColumnNames = primaryKeyColumnNames1;
                 this.close();
                 this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+                this.metaClient = StreamerUtil.createMetaClient(this.config);
                 //将变化发往下游compact和clean任务
                 out.collect(this.config);
             }

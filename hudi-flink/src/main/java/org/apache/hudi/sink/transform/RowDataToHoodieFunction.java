@@ -18,15 +18,17 @@
 
 package org.apache.hudi.sink.transform;
 
-import com.hito.econ.flink.common.model.HoodieRecordWithSchema;
+import cn.hutool.core.util.StrUtil;
 import com.hito.econ.flink.common.model.RowDataWithSchema;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieOperation;
 import org.apache.hudi.common.model.HoodieRecord;
 import org.apache.hudi.common.model.HoodieRecordPayload;
 import org.apache.hudi.configuration.FlinkOptions;
+import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.keygen.KeyGenerator;
 import org.apache.hudi.keygen.factory.HoodieAvroKeyGeneratorFactory;
+import org.apache.hudi.model.HoodieRecordWithSchema;
 import org.apache.hudi.sink.utils.PayloadCreation;
 import org.apache.hudi.util.AvroSchemaConverter;
 import org.apache.hudi.util.RowDataToAvroConverters;
@@ -38,8 +40,11 @@ import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.List;
 
 import static org.apache.hudi.util.StreamerUtil.flinkConf2TypedProperties;
 
@@ -52,6 +57,7 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
      * Row type of the input.
      */
     private RowType rowType;
+    private List<String> primaryKeyColumnNames;
 
     /**
      * Avro schema of the input.
@@ -83,15 +89,21 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
         this.config = config;
     }
 
+    private static final Logger LOG = LoggerFactory.getLogger(RowDataToHoodieFunction.class);
+
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
-        this.avroSchema = StreamerUtil.getSourceSchema(this.config);
-        this.converter = RowDataToAvroConverters.createConverter(this.rowType);
-        this.keyGenerator =
-                HoodieAvroKeyGeneratorFactory
-                        .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
-        this.payloadCreation = PayloadCreation.instance(config);
+        try {
+            this.avroSchema = StreamerUtil.getSourceSchema(this.config);
+            this.converter = RowDataToAvroConverters.createConverter(this.rowType);
+            this.keyGenerator =
+                    HoodieAvroKeyGeneratorFactory
+                            .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
+            this.payloadCreation = PayloadCreation.instance(config);
+        } catch (HoodieException e) {
+            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -109,24 +121,30 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
      */
     @SuppressWarnings("rawtypes")
     private HoodieRecord toHoodieRecord(I record) throws Exception {
-        GenericRecord gr = (GenericRecord) this.converter.convert(this.avroSchema, record);
-        final HoodieKey hoodieKey = keyGenerator.getKey(gr);
-
-        HoodieRecordPayload payload = payloadCreation.createPayload(gr);
         HoodieOperation operation = HoodieOperation.fromValue(record.getRowKind().toByteValue());
         if (record instanceof RowDataWithSchema) {
-            if (!((RowDataWithSchema) record).getRowType().equals(this.rowType)) {
-                this.rowType = ((RowDataWithSchema) record).getRowType();
+            RowDataWithSchema rowDataWithSchema = (RowDataWithSchema) record;
+            RowType rowType1 = rowDataWithSchema.getRowType();
+            List primaryKeyColumnNames1 = rowDataWithSchema.getPrimaryKeyColumnNames();
+            if (!rowType1.equals(this.rowType) || !primaryKeyColumnNames1.equals(this.primaryKeyColumnNames)) {
+                this.rowType = rowDataWithSchema.getRowType();
                 this.avroSchema = AvroSchemaConverter.convertToSchema(this.rowType);
                 this.converter = RowDataToAvroConverters.createConverter(this.rowType);
                 this.config.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, this.avroSchema.toString());
+                this.config.setString(FlinkOptions.RECORD_KEY_FIELD, StrUtil.join(",", primaryKeyColumnNames1));
                 this.keyGenerator =
                         HoodieAvroKeyGeneratorFactory
                                 .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
                 this.payloadCreation = PayloadCreation.instance(this.config);
+                GenericRecord gr = (GenericRecord) this.converter.convert(this.avroSchema, record);
+                final HoodieKey hoodieKey = keyGenerator.getKey(gr);
+                HoodieRecordPayload payload = payloadCreation.createPayload(gr);
                 return new HoodieRecordWithSchema(hoodieKey, payload, operation, (RowDataWithSchema) record);
             }
         }
+        GenericRecord gr = (GenericRecord) this.converter.convert(this.avroSchema, record);
+        HoodieRecordPayload payload = payloadCreation.createPayload(gr);
+        final HoodieKey hoodieKey = keyGenerator.getKey(gr);
         return new HoodieRecord<>(hoodieKey, payload, operation);
     }
 }
