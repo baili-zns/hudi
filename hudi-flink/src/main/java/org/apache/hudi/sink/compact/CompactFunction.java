@@ -80,7 +80,7 @@ public class CompactFunction extends ProcessFunction<CompactionPlanEvent, Compac
         try {
             this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
         } catch (HoodieException e) {
-            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
         }
         if (this.asyncCompaction) {
             this.executor = NonThrownExecutor.builder(LOG).build();

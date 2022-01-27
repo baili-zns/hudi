@@ -102,7 +102,7 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
                             .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
             this.payloadCreation = PayloadCreation.instance(config);
         } catch (HoodieException e) {
-            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
         }
     }
 

@@ -55,206 +55,208 @@ import java.util.Objects;
  * @see StreamWriteOperatorCoordinator
  */
 public abstract class AbstractStreamWriteFunction<I>
-    extends AbstractWriteFunction<I>
-    implements CheckpointedFunction {
+        extends AbstractWriteFunction<I>
+        implements CheckpointedFunction {
 
-  private static final Logger LOG = LoggerFactory.getLogger(AbstractStreamWriteFunction.class);
+    private static final Logger LOG = LoggerFactory.getLogger(AbstractStreamWriteFunction.class);
 
-  /**
-   * Config options.
-   */
-  protected final Configuration config;
+    /**
+     * Config options.
+     */
+    protected final Configuration config;
 
-  /**
-   * Id of current subtask.
-   */
-  protected int taskID;
+    /**
+     * Id of current subtask.
+     */
+    protected int taskID;
 
-  /**
-   * Meta Client.
-   */
-  protected transient HoodieTableMetaClient metaClient;
+    /**
+     * Meta Client.
+     */
+    protected transient HoodieTableMetaClient metaClient;
 
-  /**
-   * Write Client.
-   */
-  protected transient HoodieFlinkWriteClient writeClient;
+    /**
+     * Write Client.
+     */
+    protected transient HoodieFlinkWriteClient writeClient;
 
-  /**
-   * The REQUESTED instant we write the data.
-   */
-  protected volatile String currentInstant;
+    /**
+     * The REQUESTED instant we write the data.
+     */
+    protected volatile String currentInstant;
 
-  /**
-   * Gateway to send operator events to the operator coordinator.
-   */
-  protected transient OperatorEventGateway eventGateway;
+    /**
+     * Gateway to send operator events to the operator coordinator.
+     */
+    protected transient OperatorEventGateway eventGateway;
 
-  /**
-   * Flag saying whether the write task is waiting for the checkpoint success notification
-   * after it finished a checkpoint.
-   *
-   * <p>The flag is needed because the write task does not block during the waiting time interval,
-   * some data buckets still flush out with old instant time. There are two cases that the flush may produce
-   * corrupted files if the old instant is committed successfully:
-   * 1) the write handle was writing data but interrupted, left a corrupted parquet file;
-   * 2) the write handle finished the write but was not closed, left an empty parquet file.
-   *
-   * <p>To solve, when this flag was set to true, we block the data flushing thus the #processElement method,
-   * the flag was reset to false if the task receives the checkpoint success event or the latest inflight instant
-   * time changed(the last instant committed successfully).
-   */
-  protected volatile boolean confirming = false;
+    /**
+     * Flag saying whether the write task is waiting for the checkpoint success notification
+     * after it finished a checkpoint.
+     *
+     * <p>The flag is needed because the write task does not block during the waiting time interval,
+     * some data buckets still flush out with old instant time. There are two cases that the flush may produce
+     * corrupted files if the old instant is committed successfully:
+     * 1) the write handle was writing data but interrupted, left a corrupted parquet file;
+     * 2) the write handle finished the write but was not closed, left an empty parquet file.
+     *
+     * <p>To solve, when this flag was set to true, we block the data flushing thus the #processElement method,
+     * the flag was reset to false if the task receives the checkpoint success event or the latest inflight instant
+     * time changed(the last instant committed successfully).
+     */
+    protected volatile boolean confirming = false;
 
-  /**
-   * List state of the write metadata events.
-   */
-  private transient ListState<WriteMetadataEvent> writeMetadataState;
+    /**
+     * List state of the write metadata events.
+     */
+    private transient ListState<WriteMetadataEvent> writeMetadataState;
 
-  /**
-   * Write status list for the current checkpoint.
-   */
-  protected List<WriteStatus> writeStatuses;
+    /**
+     * Write status list for the current checkpoint.
+     */
+    protected List<WriteStatus> writeStatuses;
 
-  /**
-   * Constructs a StreamWriteFunctionBase.
-   *
-   * @param config The config options
-   */
-  public AbstractStreamWriteFunction(Configuration config) {
-    this.config = config;
-  }
-
-  @Override
-  public void initializeState(FunctionInitializationContext context) throws Exception {
-    this.taskID = getRuntimeContext().getIndexOfThisSubtask();
-    try {//动态初始无schema，会抛错
-      this.metaClient = StreamerUtil.createMetaClient(this.config);
-      this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
-      this.currentInstant = lastPendingInstant();
-    } catch (HoodieException e) {
-      LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+    /**
+     * Constructs a StreamWriteFunctionBase.
+     *
+     * @param config The config options
+     */
+    public AbstractStreamWriteFunction(Configuration config) {
+        this.config = config;
     }
-    this.writeStatuses = new ArrayList<>();
-    this.writeMetadataState = context.getOperatorStateStore().getListState(
-        new ListStateDescriptor<>(
-            "write-metadata-state",
-            TypeInformation.of(WriteMetadataEvent.class)
-        ));
 
-    if (context.isRestored()) {
-      restoreWriteMetadata();
-    } else {
-      sendBootstrapEvent();
+    @Override
+    public void initializeState(FunctionInitializationContext context) throws Exception {
+        this.taskID = getRuntimeContext().getIndexOfThisSubtask();
+        try {//动态初始无schema，会抛错
+            this.metaClient = StreamerUtil.createMetaClient(this.config);
+            this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+            this.currentInstant = lastPendingInstant();
+        } catch (HoodieException e) {
+            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
+        }
+        this.writeStatuses = new ArrayList<>();
+        this.writeMetadataState = context.getOperatorStateStore().getListState(
+                new ListStateDescriptor<>(
+                        "write-metadata-state",
+                        TypeInformation.of(WriteMetadataEvent.class)
+                ));
+
+        if (context.isRestored()) {
+            restoreWriteMetadata();
+        } else {
+            sendBootstrapEvent();
+        }
+        // blocks flushing until the coordinator starts a new instant
+        this.confirming = true;
     }
-    // blocks flushing until the coordinator starts a new instant
-    this.confirming = true;
-  }
 
-  @Override
-  public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
-    snapshotState();
-    // Reload the snapshot state as the current state.
-    reloadWriteMetaState();
-  }
-
-  public abstract void snapshotState();
-
-  // -------------------------------------------------------------------------
-  //  Getter/Setter
-  // -------------------------------------------------------------------------
-  @VisibleForTesting
-  public boolean isConfirming() {
-    return this.confirming;
-  }
-
-  public void setOperatorEventGateway(OperatorEventGateway operatorEventGateway) {
-    this.eventGateway = operatorEventGateway;
-  }
-
-  // -------------------------------------------------------------------------
-  //  Utilities
-  // -------------------------------------------------------------------------
-
-  private void restoreWriteMetadata() throws Exception {
-    String lastInflight = lastPendingInstant();
-    boolean eventSent = false;
-    for (WriteMetadataEvent event : this.writeMetadataState.get()) {
-      if (Objects.equals(lastInflight, event.getInstantTime())) {
-        // The checkpoint succeed but the meta does not commit,
-        // re-commit the inflight instant
-        this.eventGateway.sendEventToCoordinator(event);
-        LOG.info("Send uncommitted write metadata event to coordinator, task[{}].", taskID);
-        eventSent = true;
-      }
+    @Override
+    public void snapshotState(FunctionSnapshotContext functionSnapshotContext) throws Exception {
+        snapshotState();
+        // Reload the snapshot state as the current state.
+        reloadWriteMetaState();
     }
-    if (!eventSent) {
-      sendBootstrapEvent();
+
+    public abstract void snapshotState();
+
+    // -------------------------------------------------------------------------
+    //  Getter/Setter
+    // -------------------------------------------------------------------------
+    @VisibleForTesting
+    public boolean isConfirming() {
+        return this.confirming;
     }
-  }
 
-  private void sendBootstrapEvent() {
-    this.eventGateway.sendEventToCoordinator(WriteMetadataEvent.emptyBootstrap(taskID));
-    LOG.info("Send bootstrap write metadata event to coordinator, task[{}].", taskID);
-  }
-
-  /**
-   * Reload the write metadata state as the current checkpoint.
-   */
-  private void reloadWriteMetaState() throws Exception {
-    this.writeMetadataState.clear();
-    WriteMetadataEvent event = WriteMetadataEvent.builder()
-        .taskID(taskID)
-        .instantTime(currentInstant)
-        .writeStatus(new ArrayList<>(writeStatuses))
-        .bootstrap(true)
-        .build();
-    this.writeMetadataState.add(event);
-    writeStatuses.clear();
-  }
-
-  public void handleOperatorEvent(OperatorEvent event) {
-    ValidationUtils.checkArgument(event instanceof CommitAckEvent,
-        "The write function can only handle CommitAckEvent");
-    this.confirming = false;
-  }
-
-  /**
-   * Returns the last pending instant time.
-   */
-  protected String lastPendingInstant() {
-    return StreamerUtil.getLastPendingInstant(this.metaClient);
-  }
-
-  /**
-   * Prepares the instant time to write with for next checkpoint.
-   *
-   * @param hasData Whether the task has buffering data
-   * @return The instant time
-   */
-  protected String instantToWrite(boolean hasData) {
-    String instant = lastPendingInstant();
-    // if exactly-once semantics turns on,
-    // waits for the checkpoint notification until the checkpoint timeout threshold hits.
-    TimeWait timeWait = TimeWait.builder()
-        .timeout(config.getLong(FlinkOptions.WRITE_COMMIT_ACK_TIMEOUT))
-        .action("instant initialize")
-        .build();
-    while (confirming) {
-      // wait condition:
-      // 1. there is no inflight instant
-      // 2. the inflight instant does not change and the checkpoint has buffering data
-      if (instant == null || (instant.equals(this.currentInstant) && hasData)) {
-        // sleep for a while
-        timeWait.waitFor();
-        // refresh the inflight instant
-        instant = lastPendingInstant();
-      } else {
-        // the pending instant changed, that means the last instant was committed
-        // successfully.
-        confirming = false;
-      }
+    public void setOperatorEventGateway(OperatorEventGateway operatorEventGateway) {
+        this.eventGateway = operatorEventGateway;
     }
-    return instant;
-  }
+
+    // -------------------------------------------------------------------------
+    //  Utilities
+    // -------------------------------------------------------------------------
+
+    private void restoreWriteMetadata() throws Exception {
+        String lastInflight = lastPendingInstant();
+        boolean eventSent = false;
+        for (WriteMetadataEvent event : this.writeMetadataState.get()) {
+            if (Objects.equals(lastInflight, event.getInstantTime())) {
+                // The checkpoint succeed but the meta does not commit,
+                // re-commit the inflight instant
+                this.eventGateway.sendEventToCoordinator(event);
+                LOG.info("Send uncommitted write metadata event to coordinator, task[{}].", taskID);
+                eventSent = true;
+            }
+        }
+        if (!eventSent) {
+            sendBootstrapEvent();
+        }
+    }
+
+    private void sendBootstrapEvent() {
+        this.eventGateway.sendEventToCoordinator(WriteMetadataEvent.emptyBootstrap(taskID));
+        LOG.info("Send bootstrap write metadata event to coordinator, task[{}].", taskID);
+    }
+
+    /**
+     * Reload the write metadata state as the current checkpoint.
+     */
+    private void reloadWriteMetaState() throws Exception {
+        if (this.currentInstant != null) {
+            this.writeMetadataState.clear();
+            WriteMetadataEvent event = WriteMetadataEvent.builder()
+                    .taskID(taskID)
+                    .instantTime(currentInstant)
+                    .writeStatus(new ArrayList<>(writeStatuses))
+                    .bootstrap(true)
+                    .build();
+            this.writeMetadataState.add(event);
+            writeStatuses.clear();
+        }
+    }
+
+    public void handleOperatorEvent(OperatorEvent event) {
+        ValidationUtils.checkArgument(event instanceof CommitAckEvent,
+                "The write function can only handle CommitAckEvent");
+        this.confirming = false;
+    }
+
+    /**
+     * Returns the last pending instant time.
+     */
+    protected String lastPendingInstant() {
+        return StreamerUtil.getLastPendingInstant(this.metaClient);
+    }
+
+    /**
+     * Prepares the instant time to write with for next checkpoint.
+     *
+     * @param hasData Whether the task has buffering data
+     * @return The instant time
+     */
+    protected String instantToWrite(boolean hasData) {
+        String instant = lastPendingInstant();
+        // if exactly-once semantics turns on,
+        // waits for the checkpoint notification until the checkpoint timeout threshold hits.
+        TimeWait timeWait = TimeWait.builder()
+                .timeout(config.getLong(FlinkOptions.WRITE_COMMIT_ACK_TIMEOUT))
+                .action("instant initialize")
+                .build();
+        while (confirming) {
+            // wait condition:
+            // 1. there is no inflight instant
+            // 2. the inflight instant does not change and the checkpoint has buffering data
+            if (instant == null || (instant.equals(this.currentInstant) && hasData)) {
+                // sleep for a while
+                timeWait.waitFor();
+                // refresh the inflight instant
+                instant = lastPendingInstant();
+            } else {
+                // the pending instant changed, that means the last instant was committed
+                // successfully.
+                confirming = false;
+            }
+        }
+        return instant;
+    }
 }

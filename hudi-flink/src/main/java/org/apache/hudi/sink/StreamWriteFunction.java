@@ -156,6 +156,7 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
                 this.close();
                 this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
                 this.metaClient = StreamerUtil.createMetaClient(this.config);
+                this.initWriteFunction();
                 //将变化发往下游compact和clean任务
                 out.collect(this.config);
             }
@@ -505,7 +506,9 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
         this.eventGateway.sendEventToCoordinator(event);
         this.buckets.clear();
         this.tracer.reset();
-        this.writeClient.cleanHandles();
+        if (this.writeClient != null) {
+            this.writeClient.cleanHandles();
+        }
         this.writeStatuses.addAll(writeStatus);
         // blocks flushing until the coordinator starts a new instant
         this.confirming = true;

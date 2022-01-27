@@ -21,6 +21,7 @@ package org.apache.hudi.sink.partitioner;
 import cn.hutool.core.util.StrUtil;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.hudi.client.FlinkTaskContextSupplier;
+import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.client.common.HoodieFlinkEngineContext;
 import org.apache.hudi.common.config.SerializableConfiguration;
 import org.apache.hudi.common.model.BaseAvroPayload;
@@ -30,6 +31,7 @@ import org.apache.hudi.common.model.HoodieRecordGlobalLocation;
 import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.model.WriteOperationType;
+import org.apache.hudi.common.table.view.FileSystemViewStorageConfig;
 import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.exception.HoodieException;
@@ -52,6 +54,7 @@ import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
+import org.apache.hudi.util.ViewStorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -123,6 +126,7 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(BucketAssignFunction.class);
+
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
@@ -140,7 +144,7 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
                     context,
                     writeConfig);
         } catch (HoodieException e) {
-            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
         }
         this.payloadCreation = PayloadCreation.instance(this.conf);
     }
@@ -152,7 +156,11 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
 
     @Override
     public void snapshotState(FunctionSnapshotContext context) {
-        this.bucketAssigner.reset();
+        if (this.bucketAssigner != null) {
+            this.bucketAssigner.reset();
+        } else {
+            LOG.warn("该snapshot了,bucketAssigner仍为空。");
+        }
     }
 
     @Override
@@ -187,14 +195,9 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
             if (!rowType1.equals(this.rowType) || !primaryKeyColumnNames1.equals(this.primaryKeyColumnNames)) {
                 this.conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, AvroSchemaConverter.convertToSchema(rowType1).toString());
                 this.conf.setString(FlinkOptions.RECORD_KEY_FIELD, StrUtil.join(",", primaryKeyColumnNames1));
-//                LOG.warn("RowType {} has changed to {}.\n RECORD_KEY_FIELD {} has changed to {}.",
-//                        this.rowType,
-//                        rowType1,
-//                        this.primaryKeyColumnNames,
-//                        primaryKeyColumnNames1
-//                );
                 this.rowType = rowType1;
                 this.primaryKeyColumnNames = primaryKeyColumnNames1;
+//                StreamerUtil.createWriteClient(this.conf);
                 HoodieWriteConfig writeConfig = StreamerUtil.getHoodieClientConfig(this.conf, true);
                 this.bucketAssigner = BucketAssigners.create(
                         getRuntimeContext().getIndexOfThisSubtask(),
@@ -274,11 +277,15 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
     @Override
     public void notifyCheckpointComplete(long checkpointId) {
         // Refresh the table state when there are new commits.
-        this.bucketAssigner.reload(checkpointId);
+        if (this.bucketAssigner != null) {
+            this.bucketAssigner.reload(checkpointId);
+        }
     }
 
     @Override
     public void close() throws Exception {
-        this.bucketAssigner.close();
+        if (this.bucketAssigner != null) {
+            this.bucketAssigner.close();
+        }
     }
 }

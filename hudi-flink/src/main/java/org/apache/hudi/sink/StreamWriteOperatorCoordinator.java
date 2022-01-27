@@ -33,10 +33,12 @@ import org.apache.hudi.common.model.WriteOperationType;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
+import org.apache.hudi.common.table.view.FileSystemViewStorageConfig;
 import org.apache.hudi.common.util.CommitUtils;
 import org.apache.hudi.common.util.Option;
 import org.apache.hudi.common.util.StringUtils;
 import org.apache.hudi.common.util.ValidationUtils;
+import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.configuration.OptionsResolver;
 import org.apache.hudi.exception.HoodieException;
@@ -48,6 +50,7 @@ import org.apache.hudi.sink.utils.NonThrownExecutor;
 import org.apache.hudi.util.AvroSchemaConverter;
 import org.apache.hudi.util.CompactionUtil;
 import org.apache.hudi.util.StreamerUtil;
+import org.apache.hudi.util.ViewStorageProperties;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +62,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 
+import static org.apache.hudi.util.StreamerUtil.getHoodieClientConfigWithoutSchema;
 import static org.apache.hudi.util.StreamerUtil.initTableIfNotExists;
 
 /**
@@ -158,21 +162,42 @@ public class StreamWriteOperatorCoordinator
         // initialize event buffer
         reset();
         this.gateways = new SubtaskGateway[this.parallelism];
-        // init table, create if not exists.
-        try {
-            this.metaClient = initTableIfNotExists(this.conf);
-            // the write client must create after the table creation
-            this.writeClient = StreamerUtil.createWriteClient(conf);
-            this.tableState = TableState.create(conf);
-            // start the executor if required
-            if (tableState.syncHive) {
-                initHiveSync();
-            }
-            if (tableState.syncMetadata) {
-                initMetadataSync();
-            }
-        } catch (HoodieException e) {
-            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+//        // init table, create if not exists.
+//        HoodieWriteConfig writeConfig = getHoodieClientConfigWithoutSchema(conf, false);
+//        // create the filesystem view storage properties for client
+//        final FileSystemViewStorageConfig viewStorageConfig = writeConfig.getViewStorageConfig();
+//        // rebuild the view storage config with simplified options.
+//        FileSystemViewStorageConfig rebuilt = FileSystemViewStorageConfig.newBuilder()
+//                .withStorageType(viewStorageConfig.getStorageType())
+//                .withRemoteServerHost(viewStorageConfig.getRemoteViewServerHost())
+//                .withRemoteServerPort(viewStorageConfig.getRemoteViewServerPort()).build();
+//        ViewStorageProperties.createProperties(conf.getString(FlinkOptions.PATH), rebuilt);
+
+//        try {
+//            this.metaClient = initTableIfNotExists(this.conf);
+//            // the write client must create after the table creation
+//            this.writeClient = StreamerUtil.createWriteClient(conf);
+//            this.tableState = TableState.create(conf);
+//            // start the executor if required
+//            if (tableState.syncHive) {
+//                initHiveSync();
+//            }
+//            if (tableState.syncMetadata) {
+//                initMetadataSync();
+//            }
+//        } catch (HoodieException e) {
+//            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
+//        }
+        this.metaClient = initTableIfNotExists(this.conf);
+        // the write client must create after the table creation
+        this.writeClient = StreamerUtil.createWriteClient(conf);
+        this.tableState = TableState.create(conf);
+        // start the executor if required
+        if (tableState.syncHive) {
+            initHiveSync();
+        }
+        if (tableState.syncMetadata) {
+            initMetadataSync();
         }
         // start the executor
         this.executor = NonThrownExecutor.builder(LOG)
@@ -227,7 +252,7 @@ public class StreamWriteOperatorCoordinator
                     // so a successful checkpoint subsumes the old one(follows the checkpoint subsuming contract)
                     final boolean committed = commitInstant(this.instant, checkpointId);
 
-                    if (tableState.scheduleCompaction) {
+                    if (tableState != null && tableState.scheduleCompaction) {
                         // if async compaction is on, schedule the compaction
                         CompactionUtil.scheduleCompaction(metaClient, writeClient, tableState.isDeltaTimeCompaction, committed);
                     }
@@ -293,7 +318,7 @@ public class StreamWriteOperatorCoordinator
     }
 
     private void syncHiveIfEnabled() {
-        if (tableState.syncHive) {
+        if (tableState != null && tableState.syncHive) {
             this.hiveSyncExecutor.execute(this::syncHive, "sync hive metadata for instant %s", this.instant);
         }
     }
@@ -330,11 +355,11 @@ public class StreamWriteOperatorCoordinator
     }
 
     private void startInstant() {
+        final String instant = HoodieActiveTimeline.createNewInstantTime();
+        // put the assignment in front of metadata generation,
+        // because the instant request from write task is asynchronous.
+        this.instant = instant;
         if (this.writeClient != null && this.metaClient != null) {
-            final String instant = HoodieActiveTimeline.createNewInstantTime();
-            // put the assignment in front of metadata generation,
-            // because the instant request from write task is asynchronous.
-            this.instant = instant;
             this.writeClient.startCommitWithTime(instant, tableState.commitAction);
             this.metaClient.getActiveTimeline().transitionRequestedToInflight(tableState.commitAction, this.instant);
             LOG.info("Create instant [{}] for table [{}] with type [{}]", this.instant,
@@ -365,9 +390,7 @@ public class StreamWriteOperatorCoordinator
             // starts a new instant
             startInstant();
             // upgrade downgrade
-            if (this.writeClient != null) {
-                this.writeClient.upgradeDowngrade(this.instant);
-            }
+            this.writeClient.upgradeDowngrade(this.instant);
         }, "initialize instant %s", instant);
     }
 
@@ -487,7 +510,8 @@ public class StreamWriteOperatorCoordinator
                     this.writeClient.cleanHandlesGracefully();
                     this.writeClient.close();
                 }
-                this.metaClient = initTableIfNotExists(this.conf);
+//                this.metaClient = initTableIfNotExists(this.conf);
+                this.metaClient = StreamerUtil.createMetaClient(this.conf);
                 // the write client must create after the table creation
                 this.writeClient = StreamerUtil.createWriteClient(conf);
                 this.tableState = TableState.create(conf);
@@ -499,7 +523,9 @@ public class StreamWriteOperatorCoordinator
                 }
             }
         }
-        doCommit(instant, writeResults);
+        if (this.writeClient != null && this.tableState != null) {
+            doCommit(instant, writeResults);
+        }
         return true;
     }
 

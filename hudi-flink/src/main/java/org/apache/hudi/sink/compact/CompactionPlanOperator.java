@@ -76,7 +76,7 @@ public class CompactionPlanOperator extends AbstractStreamOperator<CompactionPla
             // scheduled from earliest(FIFO sequence).
             CompactionUtil.rollbackCompaction(table);
         } catch (HoodieException e) {
-            LOG.warn("初始化writeClient失败,稍后根据数据进行初始化");
+            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
         }
     }
 

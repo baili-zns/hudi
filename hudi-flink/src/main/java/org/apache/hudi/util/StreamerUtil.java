@@ -220,6 +220,65 @@ public class StreamerUtil {
     return writeConfig;
   }
 
+  public static HoodieWriteConfig getHoodieClientConfigWithoutSchema(
+          Configuration conf,
+          boolean enableEmbeddedTimelineService) {
+    HoodieWriteConfig.Builder builder =
+            HoodieWriteConfig.newBuilder()
+                    .withEngineType(EngineType.FLINK)
+                    .withPath(conf.getString(FlinkOptions.PATH))
+                    .combineInput(conf.getBoolean(FlinkOptions.PRE_COMBINE), true)
+                    .withMergeAllowDuplicateOnInserts(OptionsResolver.insertClustering(conf))
+                    .withCompactionConfig(
+                            HoodieCompactionConfig.newBuilder()
+                                    .withPayloadClass(conf.getString(FlinkOptions.PAYLOAD_CLASS_NAME))
+                                    .withTargetIOPerCompactionInMB(conf.getLong(FlinkOptions.COMPACTION_TARGET_IO))
+                                    .withInlineCompactionTriggerStrategy(
+                                            CompactionTriggerStrategy.valueOf(conf.getString(FlinkOptions.COMPACTION_TRIGGER_STRATEGY).toUpperCase(Locale.ROOT)))
+                                    .withMaxNumDeltaCommitsBeforeCompaction(conf.getInteger(FlinkOptions.COMPACTION_DELTA_COMMITS))
+                                    .withMaxDeltaSecondsBeforeCompaction(conf.getInteger(FlinkOptions.COMPACTION_DELTA_SECONDS))
+                                    .withAsyncClean(conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED))
+                                    .retainCommits(conf.getInteger(FlinkOptions.CLEAN_RETAIN_COMMITS))
+                                    // override and hardcode to 20,
+                                    // actually Flink cleaning is always with parallelism 1 now
+                                    .withCleanerParallelism(20)
+                                    .archiveCommitsWith(conf.getInteger(FlinkOptions.ARCHIVE_MIN_COMMITS), conf.getInteger(FlinkOptions.ARCHIVE_MAX_COMMITS))
+                                    .withCleanerPolicy(HoodieCleaningPolicy.KEEP_LATEST_COMMITS)
+                                    .build())
+                    .withMemoryConfig(
+                            HoodieMemoryConfig.newBuilder()
+                                    .withMaxMemoryMaxSize(
+                                            conf.getInteger(FlinkOptions.WRITE_MERGE_MAX_MEMORY) * 1024 * 1024L,
+                                            conf.getInteger(FlinkOptions.COMPACTION_MAX_MEMORY) * 1024 * 1024L
+                                    ).build())
+                    .forTable(conf.getString(FlinkOptions.TABLE_NAME))
+                    .withStorageConfig(HoodieStorageConfig.newBuilder()
+                            .logFileDataBlockMaxSize(conf.getInteger(FlinkOptions.WRITE_LOG_BLOCK_SIZE) * 1024 * 1024)
+                            .logFileMaxSize(conf.getLong(FlinkOptions.WRITE_LOG_MAX_SIZE) * 1024 * 1024)
+                            .parquetBlockSize(conf.getInteger(FlinkOptions.WRITE_PARQUET_BLOCK_SIZE) * 1024 * 1024)
+                            .parquetPageSize(conf.getInteger(FlinkOptions.WRITE_PARQUET_PAGE_SIZE) * 1024 * 1024)
+                            .parquetMaxFileSize(conf.getInteger(FlinkOptions.WRITE_PARQUET_MAX_FILE_SIZE) * 1024 * 1024L)
+                            .build())
+                    .withMetadataConfig(HoodieMetadataConfig.newBuilder()
+                            .enable(conf.getBoolean(FlinkOptions.METADATA_ENABLED))
+                            .withMaxNumDeltaCommitsBeforeCompaction(conf.getInteger(FlinkOptions.METADATA_COMPACTION_DELTA_COMMITS))
+                            .build())
+                    .withPayloadConfig(HoodiePayloadConfig.newBuilder()
+                            .withPayloadOrderingField(conf.getString(FlinkOptions.PRECOMBINE_FIELD))
+                            .withPayloadEventTimeField(conf.getString(FlinkOptions.PRECOMBINE_FIELD))
+                            .build())
+                    .withEmbeddedTimelineServerEnabled(enableEmbeddedTimelineService)
+                    .withEmbeddedTimelineServerReuseEnabled(true) // make write client embedded timeline service singleton
+                    .withAutoCommit(false)
+                    .withAllowOperationMetadataField(conf.getBoolean(FlinkOptions.CHANGELOG_ENABLED))
+                    .withProps(flinkConf2TypedProperties(conf))
+//                    .withSchema(getSourceSchema(conf).toString())
+            ;
+
+    HoodieWriteConfig writeConfig = builder.build();
+    return writeConfig;
+  }
+
   /**
    * Converts the give {@link Configuration} to {@link TypedProperties}.
    * The default values are also set up.
