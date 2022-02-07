@@ -21,7 +21,6 @@ package org.apache.hudi.sink.partitioner;
 import cn.hutool.core.util.StrUtil;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.hudi.client.FlinkTaskContextSupplier;
-import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.client.common.HoodieFlinkEngineContext;
 import org.apache.hudi.common.config.SerializableConfiguration;
 import org.apache.hudi.common.model.BaseAvroPayload;
@@ -31,10 +30,8 @@ import org.apache.hudi.common.model.HoodieRecordGlobalLocation;
 import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.model.WriteOperationType;
-import org.apache.hudi.common.table.view.FileSystemViewStorageConfig;
 import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.configuration.FlinkOptions;
-import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.model.HoodieRecordWithSchema;
 import org.apache.hudi.sink.bootstrap.IndexRecord;
 import org.apache.hudi.sink.utils.PayloadCreation;
@@ -54,7 +51,6 @@ import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
-import org.apache.hudi.util.ViewStorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,6 +75,8 @@ import java.util.Objects;
 public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
         extends KeyedProcessFunction<K, I, O>
         implements CheckpointedFunction, CheckpointListener {
+    private static final Logger LOG = LoggerFactory.getLogger(BucketAssignFunction.class);
+
 
     /**
      * Index cache(speed-up) state for the underneath file based(BloomFilter) indices.
@@ -113,9 +111,10 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
      */
     private final boolean globalIndex;
 
-    private HoodieFlinkEngineContext context;
     private RowType rowType;
     private List<String> primaryKeyColumnNames;
+
+    private HoodieFlinkEngineContext context;
 
     public BucketAssignFunction(Configuration conf) {
         this.conf = conf;
@@ -125,27 +124,21 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
                 && !conf.getBoolean(FlinkOptions.CHANGELOG_ENABLED);
     }
 
-    private static final Logger LOG = LoggerFactory.getLogger(BucketAssignFunction.class);
-
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
-        context = new HoodieFlinkEngineContext(
+        HoodieWriteConfig writeConfig = StreamerUtil.getHoodieClientConfig(this.conf, true);
+        this.context = new HoodieFlinkEngineContext(
                 new SerializableConfiguration(StreamerUtil.getHadoopConf()),
                 new FlinkTaskContextSupplier(getRuntimeContext()));
-        try {
-            HoodieWriteConfig writeConfig = StreamerUtil.getHoodieClientConfig(this.conf, true);
-            this.bucketAssigner = BucketAssigners.create(
-                    getRuntimeContext().getIndexOfThisSubtask(),
-                    getRuntimeContext().getMaxNumberOfParallelSubtasks(),
-                    getRuntimeContext().getNumberOfParallelSubtasks(),
-                    ignoreSmallFiles(),
-                    HoodieTableType.valueOf(conf.getString(FlinkOptions.TABLE_TYPE)),
-                    context,
-                    writeConfig);
-        } catch (HoodieException e) {
-            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
-        }
+        this.bucketAssigner = BucketAssigners.create(
+                getRuntimeContext().getIndexOfThisSubtask(),
+                getRuntimeContext().getMaxNumberOfParallelSubtasks(),
+                getRuntimeContext().getNumberOfParallelSubtasks(),
+                ignoreSmallFiles(),
+                HoodieTableType.valueOf(conf.getString(FlinkOptions.TABLE_TYPE)),
+                context,
+                writeConfig);
         this.payloadCreation = PayloadCreation.instance(this.conf);
     }
 
@@ -156,11 +149,7 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
 
     @Override
     public void snapshotState(FunctionSnapshotContext context) {
-        if (this.bucketAssigner != null) {
-            this.bucketAssigner.reset();
-        } else {
-            LOG.warn("该snapshot了,bucketAssigner仍为空。");
-        }
+        this.bucketAssigner.reset();
     }
 
     @Override
@@ -197,7 +186,8 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
                 this.conf.setString(FlinkOptions.RECORD_KEY_FIELD, StrUtil.join(",", primaryKeyColumnNames1));
                 this.rowType = rowType1;
                 this.primaryKeyColumnNames = primaryKeyColumnNames1;
-//                StreamerUtil.createWriteClient(this.conf);
+                LOG.warn("BucketAssignFunction 配置发生变化。");
+                this.bucketAssigner.close();
                 HoodieWriteConfig writeConfig = StreamerUtil.getHoodieClientConfig(this.conf, true);
                 this.bucketAssigner = BucketAssigners.create(
                         getRuntimeContext().getIndexOfThisSubtask(),
@@ -207,6 +197,7 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
                         HoodieTableType.valueOf(conf.getString(FlinkOptions.TABLE_TYPE)),
                         context,
                         writeConfig);
+                this.payloadCreation = PayloadCreation.instance(this.conf);
             }
         }
         // 1. put the record into the BucketAssigner;
@@ -277,15 +268,11 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
     @Override
     public void notifyCheckpointComplete(long checkpointId) {
         // Refresh the table state when there are new commits.
-        if (this.bucketAssigner != null) {
-            this.bucketAssigner.reload(checkpointId);
-        }
+        this.bucketAssigner.reload(checkpointId);
     }
 
     @Override
     public void close() throws Exception {
-        if (this.bucketAssigner != null) {
-            this.bucketAssigner.close();
-        }
+        this.bucketAssigner.close();
     }
 }

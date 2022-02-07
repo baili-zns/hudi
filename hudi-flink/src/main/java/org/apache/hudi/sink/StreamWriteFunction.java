@@ -35,6 +35,7 @@ import org.apache.hudi.index.HoodieIndex;
 import org.apache.hudi.model.HoodieRecordWithSchema;
 import org.apache.hudi.sink.common.AbstractStreamWriteFunction;
 import org.apache.hudi.sink.event.WriteMetadataEvent;
+import org.apache.hudi.sink.event.WriteMetadataEventEx;
 import org.apache.hudi.table.action.commit.FlinkWriteHelper;
 import org.apache.hudi.util.AvroSchemaConverter;
 import org.apache.hudi.util.StreamerUtil;
@@ -54,6 +55,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
@@ -159,6 +161,9 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
                 this.initWriteFunction();
                 //将变化发往下游compact和clean任务
                 out.collect(this.config);
+                LOG.warn("sendEventToCoordinator ....");
+                this.eventGateway.sendEventToCoordinator(new WriteMetadataEventEx(taskID, currentInstant, null, false, false, false, this.rowType, this.primaryKeyColumnNames)
+                );
             }
         }
         bufferRecord((HoodieRecord<?>) value);

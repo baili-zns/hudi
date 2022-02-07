@@ -20,6 +20,7 @@ package org.apache.hudi.sink;
 
 import org.apache.avro.Schema;
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.runtime.operators.coordination.OperatorCoordinator;
@@ -28,6 +29,7 @@ import org.apache.flink.runtime.operators.coordination.TaskNotRunningException;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.client.WriteStatus;
+import org.apache.hudi.client.common.HoodieFlinkEngineContext;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.model.WriteOperationType;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
@@ -62,8 +64,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 
-import static org.apache.hudi.util.StreamerUtil.getHoodieClientConfigWithoutSchema;
-import static org.apache.hudi.util.StreamerUtil.initTableIfNotExists;
+import static org.apache.hudi.util.StreamerUtil.*;
 
 /**
  * {@link OperatorCoordinator} for {@link StreamWriteFunction}.
@@ -162,32 +163,7 @@ public class StreamWriteOperatorCoordinator
         // initialize event buffer
         reset();
         this.gateways = new SubtaskGateway[this.parallelism];
-//        // init table, create if not exists.
-//        HoodieWriteConfig writeConfig = getHoodieClientConfigWithoutSchema(conf, false);
-//        // create the filesystem view storage properties for client
-//        final FileSystemViewStorageConfig viewStorageConfig = writeConfig.getViewStorageConfig();
-//        // rebuild the view storage config with simplified options.
-//        FileSystemViewStorageConfig rebuilt = FileSystemViewStorageConfig.newBuilder()
-//                .withStorageType(viewStorageConfig.getStorageType())
-//                .withRemoteServerHost(viewStorageConfig.getRemoteViewServerHost())
-//                .withRemoteServerPort(viewStorageConfig.getRemoteViewServerPort()).build();
-//        ViewStorageProperties.createProperties(conf.getString(FlinkOptions.PATH), rebuilt);
 
-//        try {
-//            this.metaClient = initTableIfNotExists(this.conf);
-//            // the write client must create after the table creation
-//            this.writeClient = StreamerUtil.createWriteClient(conf);
-//            this.tableState = TableState.create(conf);
-//            // start the executor if required
-//            if (tableState.syncHive) {
-//                initHiveSync();
-//            }
-//            if (tableState.syncMetadata) {
-//                initMetadataSync();
-//            }
-//        } catch (HoodieException e) {
-//            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
-//        }
         this.metaClient = initTableIfNotExists(this.conf);
         // the write client must create after the table creation
         this.writeClient = StreamerUtil.createWriteClient(conf);
@@ -415,16 +391,59 @@ public class StreamWriteOperatorCoordinator
         }
     }
 
-    private void handleWriteMetaEvent(WriteMetadataEvent event) {
+    private void handleWriteMetaEvent(WriteMetadataEvent event) throws IOException {
         // the write task does not block after checkpointing(and before it receives a checkpoint success event),
         // if it checkpoints succeed then flushes the data buffer again before this coordinator receives a checkpoint
         // success event, the data buffer would flush with an older instant time.
-        ValidationUtils.checkState(
-                HoodieTimeline.compareTimestamps(this.instant, HoodieTimeline.GREATER_THAN_OR_EQUALS, event.getInstantTime()),
-                String.format("Receive an unexpected event for instant %s from task %d",
-                        event.getInstantTime(), event.getTaskID()));
+        if (event instanceof WriteMetadataEventEx) {
+            LOG.warn("handleWriteMetaEventEx .....");
+            WriteMetadataEventEx eventEx = (WriteMetadataEventEx) event;
+            RowType rowType = eventEx.getRowType();
+            boolean schemaChanged = false;
+            if (rowType != null) {
+                Schema schema = AvroSchemaConverter.convertToSchema((rowType));
+                if (!schema.toString().equals(this.conf.getString(FlinkOptions.SOURCE_AVRO_SCHEMA))
+                ) {
+                    this.conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, schema.toString());
+                    schemaChanged = true;
+                }
+            }
+            List<String> primaryKeyColumnNames = eventEx.getPrimaryKeyColumnNames();
+            if (primaryKeyColumnNames != null && !primaryKeyColumnNames.isEmpty()) {
+                String s = StringUtils.joinUsingDelim(",", primaryKeyColumnNames.toArray(new String[0]));
+                if (!s.equals(this.conf.getString(FlinkOptions.RECORD_KEY_FIELD))) {
+                    this.conf.setString(FlinkOptions.RECORD_KEY_FIELD, s);
+                    schemaChanged = true;
+                }
+            }
+            if (schemaChanged) {
+                LOG.warn("reset writeClient ....");
+                if (this.writeClient != null) {
+                    this.writeClient.cleanHandlesGracefully();
+                    this.writeClient.close();
+                }
+//                this.metaClient = initTableIfNotExists(this.conf);
+                this.metaClient = StreamerUtil.createMetaClient(this.conf);
+                // the write client must create after the table creation
+                HoodieWriteConfig writeConfig = getHoodieClientConfig(conf, true, true);
+                // build the write client to start the embedded timeline server
+                this.writeClient = new HoodieFlinkWriteClient<>(HoodieFlinkEngineContext.DEFAULT, writeConfig);
+                this.tableState = TableState.create(conf);
+                if (tableState.syncHive) {
+                    initHiveSync();
+                }
+                if (tableState.syncMetadata) {
+                    initMetadataSync();
+                }
+            }
+        } else {
+            ValidationUtils.checkState(
+                    HoodieTimeline.compareTimestamps(this.instant, HoodieTimeline.GREATER_THAN_OR_EQUALS, event.getInstantTime()),
+                    String.format("Receive an unexpected event for instant %s from task %d",
+                            event.getInstantTime(), event.getTaskID()));
 
-        addEventToBuffer(event);
+            addEventToBuffer(event);
+        }
     }
 
     /**
@@ -484,44 +503,6 @@ public class StreamWriteOperatorCoordinator
             // Send commit ack event to the write function to unblock the flushing
             sendCommitAckEvents(checkpointId);
             return false;
-        }
-        if (eventBuffer[eventBuffer.length - 1] instanceof WriteMetadataEventEx) {
-            WriteMetadataEventEx eventEx = (WriteMetadataEventEx) eventBuffer[eventBuffer.length - 1];
-            RowType rowType = eventEx.getRowType();
-            boolean schemaChanged = false;
-            if (rowType != null) {
-                Schema schema = AvroSchemaConverter.convertToSchema((rowType));
-                if (!schema.toString().equals(this.conf.getString(FlinkOptions.SOURCE_AVRO_SCHEMA))
-                ) {
-                    this.conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, schema.toString());
-                    schemaChanged = true;
-                }
-            }
-            List<String> primaryKeyColumnNames = eventEx.getPrimaryKeyColumnNames();
-            if (primaryKeyColumnNames != null && !primaryKeyColumnNames.isEmpty()) {
-                String s = StringUtils.joinUsingDelim(",", primaryKeyColumnNames.toArray(new String[0]));
-                if (!s.equals(this.conf.getString(FlinkOptions.RECORD_KEY_FIELD))) {
-                    this.conf.setString(FlinkOptions.RECORD_KEY_FIELD, s);
-                    schemaChanged = true;
-                }
-            }
-            if (schemaChanged) {
-                if (this.writeClient != null) {
-                    this.writeClient.cleanHandlesGracefully();
-                    this.writeClient.close();
-                }
-//                this.metaClient = initTableIfNotExists(this.conf);
-                this.metaClient = StreamerUtil.createMetaClient(this.conf);
-                // the write client must create after the table creation
-                this.writeClient = StreamerUtil.createWriteClient(conf);
-                this.tableState = TableState.create(conf);
-                if (tableState.syncHive) {
-                    initHiveSync();
-                }
-                if (tableState.syncMetadata) {
-                    initMetadataSync();
-                }
-            }
         }
         if (this.writeClient != null && this.tableState != null) {
             doCommit(instant, writeResults);

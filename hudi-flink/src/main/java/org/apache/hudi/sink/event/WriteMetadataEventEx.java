@@ -35,6 +35,20 @@ public class WriteMetadataEventEx extends WriteMetadataEvent {
         ReflectUtil.setFieldValue(this, "bootstrap", bootstrap);
     }
 
+    public WriteMetadataEventEx(
+            int taskID,
+            String instantTime,
+            List<WriteStatus> writeStatuses,
+            boolean lastBatch,
+            boolean endInput,
+            boolean bootstrap,
+            RowType rowType,
+            List<String> primaryKeyColumnNames) {
+        this(taskID, instantTime, writeStatuses, lastBatch, endInput, bootstrap);
+        this.rowType = rowType;
+        this.primaryKeyColumnNames = primaryKeyColumnNames;
+    }
+
     // default constructor for efficient serialization
     public WriteMetadataEventEx() {
     }

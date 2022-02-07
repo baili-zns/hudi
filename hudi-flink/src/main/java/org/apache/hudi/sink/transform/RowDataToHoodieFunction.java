@@ -132,6 +132,7 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
                 this.converter = RowDataToAvroConverters.createConverter(this.rowType);
                 this.config.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, this.avroSchema.toString());
                 this.config.setString(FlinkOptions.RECORD_KEY_FIELD, StrUtil.join(",", primaryKeyColumnNames1));
+                this.config.setString(FlinkOptions.PRECOMBINE_FIELD, StrUtil.join(",", primaryKeyColumnNames1));
                 this.keyGenerator =
                         HoodieAvroKeyGeneratorFactory
                                 .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
