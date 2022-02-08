@@ -418,16 +418,14 @@ public class StreamWriteOperatorCoordinator
             }
             if (schemaChanged) {
                 LOG.warn("reset writeClient ....");
-                if (this.writeClient != null) {
-                    this.writeClient.cleanHandlesGracefully();
-                    this.writeClient.close();
-                }
+                this.writeClient.cleanHandlesGracefully();
+                this.writeClient.close();
 //                this.metaClient = initTableIfNotExists(this.conf);
                 this.metaClient = StreamerUtil.createMetaClient(this.conf);
                 // the write client must create after the table creation
                 HoodieWriteConfig writeConfig = getHoodieClientConfig(conf, true, true);
                 // build the write client to start the embedded timeline server
-                this.writeClient = new HoodieFlinkWriteClient<>(HoodieFlinkEngineContext.DEFAULT, writeConfig);
+                this.writeClient = new HoodieFlinkWriteClient<>(this.writeClient.getEngineContext(), writeConfig);
                 this.tableState = TableState.create(conf);
                 if (tableState.syncHive) {
                     initHiveSync();
