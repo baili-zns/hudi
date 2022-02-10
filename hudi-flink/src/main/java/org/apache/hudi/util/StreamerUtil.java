@@ -28,6 +28,7 @@ import org.apache.hudi.common.config.TypedProperties;
 import org.apache.hudi.common.engine.EngineType;
 import org.apache.hudi.common.fs.FSUtils;
 import org.apache.hudi.common.model.HoodieCleaningPolicy;
+import org.apache.hudi.common.table.HoodieTableConfig;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.log.HoodieLogFormat;
 import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
@@ -81,6 +82,7 @@ import static org.apache.hudi.common.model.HoodieFileFormat.HOODIE_LOG;
 import static org.apache.hudi.common.model.HoodieFileFormat.ORC;
 import static org.apache.hudi.common.model.HoodieFileFormat.PARQUET;
 import static org.apache.hudi.common.table.HoodieTableConfig.ARCHIVELOG_FOLDER;
+import static org.apache.hudi.common.table.HoodieTableMetaClient.METAFOLDER_NAME;
 
 /**
  * Utilities for Flink stream read and write.
@@ -340,6 +342,50 @@ public class StreamerUtil {
     // some filesystems release the handles in #close method.
   }
 
+  public static HoodieTableMetaClient resetTable(Configuration conf) throws IOException {
+    final String basePath = conf.getString(FlinkOptions.PATH);
+    final org.apache.hadoop.conf.Configuration hadoopConf = StreamerUtil.getHadoopConf();
+      HoodieTableMetaClient metaClient = HoodieTableMetaClient.withPropertyBuilder()
+              .setTableCreateSchema(conf.getString(FlinkOptions.SOURCE_AVRO_SCHEMA))
+              .setTableType(conf.getString(FlinkOptions.TABLE_TYPE))
+              .setTableName(conf.getString(FlinkOptions.TABLE_NAME))
+              .setRecordKeyFields(conf.getString(FlinkOptions.RECORD_KEY_FIELD, null))
+              .setPayloadClassName(conf.getString(FlinkOptions.PAYLOAD_CLASS_NAME))
+              .setPreCombineField(OptionsResolver.getPreCombineField(conf))
+              .setArchiveLogFolder(ARCHIVELOG_FOLDER.defaultValue())
+              .setPartitionFields(conf.getString(FlinkOptions.PARTITION_PATH_FIELD, null))
+              .setKeyGeneratorClassProp(conf.getString(FlinkOptions.KEYGEN_CLASS_NAME))
+              .setHiveStylePartitioningEnable(conf.getBoolean(FlinkOptions.HIVE_STYLE_PARTITIONING))
+              .setUrlEncodePartitioning(conf.getBoolean(FlinkOptions.URL_ENCODE_PARTITIONING))
+              .setTimelineLayoutVersion(1)
+              .initTable(hadoopConf, basePath);
+      LOG.info("Table to reset has been reInitialized under base path {}", basePath);
+      return metaClient;
+    // Do not close the filesystem in order to use the CACHE,
+    // some filesystems release the handles in #close method.
+  }
+  public static void resetTableMeta(Configuration conf) throws IOException {
+    final String basePath = conf.getString(FlinkOptions.PATH);
+    final org.apache.hadoop.conf.Configuration hadoopConf = StreamerUtil.getHadoopConf();
+    HoodieTableMetaClient.withPropertyBuilder()
+            .setTableCreateSchema(conf.getString(FlinkOptions.SOURCE_AVRO_SCHEMA))
+            .setTableType(conf.getString(FlinkOptions.TABLE_TYPE))
+            .setTableName(conf.getString(FlinkOptions.TABLE_NAME))
+            .setRecordKeyFields(conf.getString(FlinkOptions.RECORD_KEY_FIELD, null))
+            .setPayloadClassName(conf.getString(FlinkOptions.PAYLOAD_CLASS_NAME))
+            .setPreCombineField(OptionsResolver.getPreCombineField(conf))
+            .setArchiveLogFolder(ARCHIVELOG_FOLDER.defaultValue())
+            .setPartitionFields(conf.getString(FlinkOptions.PARTITION_PATH_FIELD, null))
+            .setKeyGeneratorClassProp(conf.getString(FlinkOptions.KEYGEN_CLASS_NAME))
+            .setHiveStylePartitioningEnable(conf.getBoolean(FlinkOptions.HIVE_STYLE_PARTITIONING))
+            .setUrlEncodePartitioning(conf.getBoolean(FlinkOptions.URL_ENCODE_PARTITIONING))
+            .setTimelineLayoutVersion(1)
+            .initTableMeta(hadoopConf, basePath);
+    LOG.info("TableMeta to reset has been reInitialized under base path {}", basePath);
+    // Do not close the filesystem in order to use the CACHE,
+    // some filesystems release the handles in #close method.
+  }
+
   /**
    * Returns whether the hoodie table exists under given path {@code basePath}.
    */
@@ -347,7 +393,7 @@ public class StreamerUtil {
     // Hadoop FileSystem
     FileSystem fs = FSUtils.getFs(basePath, hadoopConf);
     try {
-      return fs.exists(new Path(basePath, HoodieTableMetaClient.METAFOLDER_NAME));
+      return fs.exists(new Path(basePath, METAFOLDER_NAME));
     } catch (IOException e) {
       throw new HoodieException("Error while checking whether table exists under path:" + basePath, e);
     }

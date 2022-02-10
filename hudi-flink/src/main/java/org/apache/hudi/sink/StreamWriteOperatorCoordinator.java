@@ -141,6 +141,8 @@ public class StreamWriteOperatorCoordinator
      */
     private transient TableState tableState;
 
+    private WriteMetadataEventEx writeMetadataEventEx;
+
     /**
      * Constructs a StreamingSinkOperatorCoordinator.
      *
@@ -157,6 +159,7 @@ public class StreamWriteOperatorCoordinator
 
     @Override
     public void start() throws Exception {
+        LOG.info("Starting StreamWriteOperatorCoordinator");
         // setup classloader for APIs that use reflection without taking ClassLoader param
         // reference: https://stackoverflow.com/questions/1771679/difference-between-threads-context-class-loader-and-normal-classloader
         Thread.currentThread().setContextClassLoader(getClass().getClassLoader());
@@ -396,42 +399,54 @@ public class StreamWriteOperatorCoordinator
         // if it checkpoints succeed then flushes the data buffer again before this coordinator receives a checkpoint
         // success event, the data buffer would flush with an older instant time.
         if (event instanceof WriteMetadataEventEx) {
-            LOG.warn("handleWriteMetaEventEx .....");
             WriteMetadataEventEx eventEx = (WriteMetadataEventEx) event;
-            RowType rowType = eventEx.getRowType();
-            boolean schemaChanged = false;
-            if (rowType != null) {
-                Schema schema = AvroSchemaConverter.convertToSchema((rowType));
-                if (!schema.toString().equals(this.conf.getString(FlinkOptions.SOURCE_AVRO_SCHEMA))
-                ) {
-                    this.conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, schema.toString());
-                    schemaChanged = true;
+            if (event.equals(this.writeMetadataEventEx)) {
+                LOG.info("已有writeFunction发送了该event:{}", eventEx);
+            } else {
+                this.writeMetadataEventEx = eventEx;
+                LOG.warn("handleWriteMetaEventEx .....");
+                RowType rowType = eventEx.getRowType();
+                boolean schemaChanged = false;
+                if (rowType != null) {
+                    Schema schema = AvroSchemaConverter.convertToSchema((rowType));
+                    if (!schema.toString().equals(this.conf.getString(FlinkOptions.SOURCE_AVRO_SCHEMA))
+                    ) {
+                        this.conf.setString(FlinkOptions.SOURCE_AVRO_SCHEMA, schema.toString());
+                        schemaChanged = true;
+                    }
                 }
-            }
-            List<String> primaryKeyColumnNames = eventEx.getPrimaryKeyColumnNames();
-            if (primaryKeyColumnNames != null && !primaryKeyColumnNames.isEmpty()) {
-                String s = StringUtils.joinUsingDelim(",", primaryKeyColumnNames.toArray(new String[0]));
-                if (!s.equals(this.conf.getString(FlinkOptions.RECORD_KEY_FIELD))) {
-                    this.conf.setString(FlinkOptions.RECORD_KEY_FIELD, s);
-                    schemaChanged = true;
+                List<String> primaryKeyColumnNames = eventEx.getPrimaryKeyColumnNames();
+                if (primaryKeyColumnNames != null && !primaryKeyColumnNames.isEmpty()) {
+                    String s = StringUtils.joinUsingDelim(",", primaryKeyColumnNames.toArray(new String[0]));
+                    if (!s.equals(this.conf.getString(FlinkOptions.RECORD_KEY_FIELD))) {
+                        this.conf.setString(FlinkOptions.RECORD_KEY_FIELD, s);
+                        schemaChanged = true;
+                    }
                 }
-            }
-            if (schemaChanged) {
-                LOG.warn("reset writeClient ....");
-                this.writeClient.cleanHandlesGracefully();
-                this.writeClient.close();
+                if (schemaChanged) {
+                    LOG.warn("reset writeClient ....");
+                    this.writeClient.cleanHandlesGracefully();
+                    this.writeClient.close();
 //                this.metaClient = initTableIfNotExists(this.conf);
-                this.metaClient = StreamerUtil.createMetaClient(this.conf);
-                // the write client must create after the table creation
-                HoodieWriteConfig writeConfig = getHoodieClientConfig(conf, true, true);
-                // build the write client to start the embedded timeline server
-                this.writeClient = new HoodieFlinkWriteClient<>(this.writeClient.getEngineContext(), writeConfig);
-                this.tableState = TableState.create(conf);
-                if (tableState.syncHive) {
-                    initHiveSync();
-                }
-                if (tableState.syncMetadata) {
-                    initMetadataSync();
+//                this.metaClient = StreamerUtil.createMetaClient(this.conf);
+                    this.metaClient = HoodieTableMetaClient.reload(this.metaClient);
+                    //在BucketAssignFunction中重置过meta了
+//                this.metaClient = resetTable(this.conf);
+//                    // the write client must create after the table creation
+//                    HoodieWriteConfig writeConfig = getHoodieClientConfig(conf, true, true);
+//                    // build the write client to start the embedded timeline server
+//                    this.writeClient = new HoodieFlinkWriteClient<>(this.writeClient.getEngineContext(), writeConfig);
+                    //不loadview，直接覆盖
+                this.writeClient = StreamerUtil.createWriteClient(conf);
+                    this.tableState = TableState.create(conf);
+                    if (tableState.syncHive) {
+                        initHiveSync();
+                    }
+                    if (tableState.syncMetadata) {
+                        initMetadataSync();
+                    }
+                    //将重置fsView的消息下发给writeFunction
+                    sendViewChangeEvent(writeMetadataEventEx);
                 }
             }
         } else {
@@ -441,6 +456,19 @@ public class StreamWriteOperatorCoordinator
                             event.getInstantTime(), event.getTaskID()));
 
             addEventToBuffer(event);
+        }
+    }
+
+    private void sendViewChangeEvent(WriteMetadataEventEx writeMetadataEventEx) {
+        CompletableFuture<?>[] futures = Arrays.stream(this.gateways).filter(Objects::nonNull)
+                .map(gw -> gw.sendEvent(writeMetadataEventEx))
+                .toArray(CompletableFuture<?>[]::new);
+        try {
+            CompletableFuture.allOf(futures).get();
+        } catch (Throwable throwable) {
+            if (!sendToFinishedTasks(throwable)) {
+                throw new HoodieException("Error while waiting for the fsViewChange ack events to finish sending", throwable);
+            }
         }
     }
 

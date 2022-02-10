@@ -27,6 +27,7 @@ import org.apache.hudi.common.model.HoodieRecord;
 import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.model.HoodieRecordPayload;
 import org.apache.hudi.common.model.WriteOperationType;
+import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.util.ObjectSizeCalculator;
 import org.apache.hudi.common.util.ValidationUtils;
 import org.apache.hudi.configuration.FlinkOptions;
@@ -125,6 +126,7 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
 
     @Override
     public void open(Configuration parameters) throws IOException {
+        LOG.info("Starting StreamWriteFunction");
         this.tracer = new TotalSizeTracer(this.config);
         initBuffer();
         initWriteFunction();
@@ -156,9 +158,11 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
                 this.rowType = rowType1;
                 this.primaryKeyColumnNames = primaryKeyColumnNames1;
                 this.close();
-                this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
-                this.metaClient = StreamerUtil.createMetaClient(this.config);
-                this.initWriteFunction();
+//                this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+////                this.writeClient = StreamerUtil.createWriteClient(this.config);
+////                this.metaClient = StreamerUtil.createMetaClient(this.config);
+//                this.metaClient = HoodieTableMetaClient.reload(this.metaClient);
+//                this.initWriteFunction();
                 //将变化发往下游compact和clean任务
                 out.collect(this.config);
                 LOG.warn("sendEventToCoordinator ....");

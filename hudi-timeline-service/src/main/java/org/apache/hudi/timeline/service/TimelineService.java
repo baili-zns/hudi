@@ -277,7 +277,7 @@ public class TimelineService {
     app.get("/", ctx -> ctx.result("Hello Hudi"));
     requestHandler.register();
     int realServerPort = startServiceOnPort(serverPort);
-    LOG.info("Starting Timeline server on port :" + realServerPort);
+    LOG.info("Starting Timeline server on port :" + realServerPort+ ".And the config port is :"+ serverPort);
     this.serverPort = realServerPort;
     return realServerPort;
   }

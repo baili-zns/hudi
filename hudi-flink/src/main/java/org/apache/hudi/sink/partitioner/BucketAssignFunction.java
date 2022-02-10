@@ -30,10 +30,13 @@ import org.apache.hudi.common.model.HoodieRecordGlobalLocation;
 import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.model.WriteOperationType;
+import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.table.view.FileSystemViewStorageConfig;
 import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.model.HoodieRecordWithSchema;
 import org.apache.hudi.sink.bootstrap.IndexRecord;
+import org.apache.hudi.sink.partitioner.profile.WriteProfiles;
 import org.apache.hudi.sink.utils.PayloadCreation;
 import org.apache.hudi.table.action.commit.BucketInfo;
 import org.apache.hudi.util.AvroSchemaConverter;
@@ -51,6 +54,7 @@ import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
+import org.apache.hudi.util.ViewStorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -126,6 +130,8 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
 
     @Override
     public void open(Configuration parameters) throws Exception {
+        LOG.info("Starting BucketAssignFunction");
+
         super.open(parameters);
         HoodieWriteConfig writeConfig = StreamerUtil.getHoodieClientConfig(this.conf, true);
         this.context = new HoodieFlinkEngineContext(
@@ -188,6 +194,8 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
                 this.primaryKeyColumnNames = primaryKeyColumnNames1;
                 LOG.warn("BucketAssignFunction 配置发生变化。");
                 this.bucketAssigner.close();
+                //重设hudi_table/.hoodie/hoodie.properties 文件
+                StreamerUtil.resetTableMeta(this.conf);
                 HoodieWriteConfig writeConfig = StreamerUtil.getHoodieClientConfig(this.conf, true);
                 this.bucketAssigner = BucketAssigners.create(
                         getRuntimeContext().getIndexOfThisSubtask(),

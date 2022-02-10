@@ -27,6 +27,7 @@ import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.sink.StreamWriteOperatorCoordinator;
 import org.apache.hudi.sink.event.CommitAckEvent;
 import org.apache.hudi.sink.event.WriteMetadataEvent;
+import org.apache.hudi.sink.event.WriteMetadataEventEx;
 import org.apache.hudi.sink.utils.TimeWait;
 import org.apache.hudi.util.StreamerUtil;
 
@@ -215,9 +216,26 @@ public abstract class AbstractStreamWriteFunction<I>
         }
     }
 
-    public void handleOperatorEvent(OperatorEvent event) {
-        ValidationUtils.checkArgument(event instanceof CommitAckEvent,
-                "The write function can only handle CommitAckEvent");
+    public void handleOperatorEvent(OperatorEvent event){
+        //原来的ack
+        if (event instanceof CommitAckEvent){
+            ValidationUtils.checkArgument(event instanceof CommitAckEvent,
+                    "The write function can only handle CommitAckEvent");
+        } else if (event instanceof WriteMetadataEventEx) {
+            //重置writeClient以刷新fsView
+            LOG.info("重置streamWriteFunction的writeClient.");
+            try {
+                this.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            this.writeClient = StreamerUtil.createWriteClient(this.config, getRuntimeContext());
+//                this.writeClient = StreamerUtil.createWriteClient(this.config);
+//                this.metaClient = StreamerUtil.createMetaClient(this.config);
+            this.metaClient = HoodieTableMetaClient.reload(this.metaClient);
+        } else {
+            throw new IllegalArgumentException("The write function can only handle CommitAckEvent and WriteMetadataEventEx");
+        }
         this.confirming = false;
     }
 

@@ -26,8 +26,10 @@ import org.apache.hudi.common.model.HoodieRecordLocation;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
+import org.apache.hudi.common.table.view.FileSystemViewStorageConfig;
 import org.apache.hudi.common.table.view.SyncableFileSystemView;
 import org.apache.hudi.config.HoodieWriteConfig;
+import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.sink.partitioner.BucketAssigner;
 import org.apache.hudi.table.HoodieFlinkTable;
 import org.apache.hudi.table.HoodieTable;
@@ -36,6 +38,7 @@ import org.apache.hudi.util.StreamerUtil;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.core.fs.Path;
+import org.apache.hudi.util.ViewStorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -249,6 +252,13 @@ public class WriteProfile {
       return;
     }
     this.metaClient.reloadActiveTimeline();
+    //刷新view,config在BucketAssignFunction中已经更新过了，但是没有更新viewStorageConfig
+    FileSystemViewStorageConfig viewStorageConfig = ViewStorageProperties.loadFromProperties(this.config.getBasePath());
+    if (!viewStorageConfig.equals(this.config.getViewStorageConfig())) {
+      this.config.setViewStorageConfig(viewStorageConfig);
+      LOG.warn("在WriteProfile里重新获取fsView");
+      this.fsView = getFileSystemView();
+    }
     this.fsView.sync();
     recordProfile();
     cleanMetadataCache(this.metaClient.getCommitsTimeline().filterCompletedInstants().getInstants());
