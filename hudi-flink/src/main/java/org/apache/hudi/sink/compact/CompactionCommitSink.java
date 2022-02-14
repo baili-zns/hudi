@@ -57,7 +57,8 @@ public class CompactionCommitSink extends CleanFunction<CompactionCommitEvent> {
     /**
      * Config options.
      */
-    private final Configuration conf;
+    private Configuration conf;
+    private Configuration latestConf;
 
     /**
      * Buffer to collect the event from each compact task {@code CompactFunction}.
@@ -91,7 +92,7 @@ public class CompactionCommitSink extends CleanFunction<CompactionCommitEvent> {
             try {
                 this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
                 this.table = this.writeClient.getHoodieTable();
-            }catch (HoodieException e) {
+            } catch (HoodieException e) {
                 LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
             }
         }
@@ -102,13 +103,7 @@ public class CompactionCommitSink extends CleanFunction<CompactionCommitEvent> {
     @Override
     public void invoke(CompactionCommitEvent event, Context context) throws Exception {
         if (event instanceof CompactionCommitEventEx) {
-            this.conf.addAll(((CompactionCommitEventEx) event).getConfiguration());
-            if (this.writeClient != null) {
-                this.writeClient.cleanHandlesGracefully();
-                this.writeClient.close();
-            }
-            this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
-            this.table = this.writeClient.getHoodieTable();
+            this.latestConf = ((CompactionCommitEventEx) event).getConfiguration();
         }
         final String instant = event.getInstant();
         if (event.isFailed()) {
@@ -155,6 +150,15 @@ public class CompactionCommitSink extends CleanFunction<CompactionCommitEvent> {
 
     @SuppressWarnings("unchecked")
     private void doCommit(String instant, Collection<CompactionCommitEvent> events) throws IOException {
+        if (!this.conf.equals(this.latestConf)) {
+            this.conf = this.latestConf;
+            if (this.writeClient != null) {
+                this.writeClient.cleanHandlesGracefully();
+                this.writeClient.close();
+            }
+            this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
+            this.table = this.writeClient.getHoodieTable();
+        }
         List<WriteStatus> statuses = events.stream()
                 .map(CompactionCommitEvent::getWriteStatuses)
                 .flatMap(Collection::stream)

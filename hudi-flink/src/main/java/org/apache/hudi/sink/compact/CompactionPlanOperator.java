@@ -54,6 +54,7 @@ public class CompactionPlanOperator extends AbstractStreamOperator<CompactionPla
      * Config options.
      */
     private Configuration conf;
+    private Configuration latestConf;
 
     /**
      * Meta Client.
@@ -92,9 +93,7 @@ public class CompactionPlanOperator extends AbstractStreamOperator<CompactionPla
 //            }
 //        }
         if (streamRecord.getValue() instanceof Configuration) {
-            this.conf = (Configuration) streamRecord.getValue();
-            this.table = FlinkTables.createTable(conf, getRuntimeContext());
-            CompactionUtil.rollbackCompaction(table);
+            this.latestConf = (Configuration) streamRecord.getValue();
         }
         // no operation
     }
@@ -111,6 +110,11 @@ public class CompactionPlanOperator extends AbstractStreamOperator<CompactionPla
 
             // comment out: do we really need the timeout rollback ?
             // CompactionUtil.rollbackEarliestCompaction(table, conf);
+            if (!this.conf.equals(this.latestConf)) {
+                this.conf = this.latestConf;
+                this.table = FlinkTables.createTable(conf, getRuntimeContext());
+                CompactionUtil.rollbackCompaction(table);
+            }
             scheduleCompaction(table, checkpointId);
         } catch (Throwable throwable) {
             // make it fail-safe
@@ -149,8 +153,11 @@ public class CompactionPlanOperator extends AbstractStreamOperator<CompactionPla
                     .map(CompactionOperation::convertFromAvroRecordInstance).collect(toList());
             LOG.info("Execute compaction plan for instant {} as {} file groups", compactionInstantTime, operations.size());
             for (CompactionOperation operation : operations) {
-//                output.collect(new StreamRecord<>(new CompactionPlanEvent(compactionInstantTime, operation)));
-                output.collect(new StreamRecord<>(new CompactionPlanEventEx(compactionInstantTime, operation, this.conf)));
+                if (this.latestConf == null) {
+                    output.collect(new StreamRecord<>(new CompactionPlanEvent(compactionInstantTime, operation)));
+                } else {
+                    output.collect(new StreamRecord<>(new CompactionPlanEventEx(compactionInstantTime, operation, this.conf)));
+                }
             }
         }
     }

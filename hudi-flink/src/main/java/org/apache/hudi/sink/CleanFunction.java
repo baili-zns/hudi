@@ -48,6 +48,7 @@ public class CleanFunction<T> extends AbstractRichFunction
     private static final Logger LOG = LoggerFactory.getLogger(CleanFunction.class);
 
     private Configuration conf;
+    private Configuration latestConf;
 
     protected HoodieFlinkWriteClient writeClient;
 
@@ -103,31 +104,24 @@ public class CleanFunction<T> extends AbstractRichFunction
     public void invoke(T value, Context context) throws Exception {
         SinkFunction.super.invoke(value, context);
         if (value instanceof Configuration) {
-            this.conf = (Configuration) value;
-            if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED)) {
-                // do not use the remote filesystem view because the async cleaning service
-                // local timeline is very probably to fall behind with the remote one.
-                if (this.writeClient != null) {
-                    this.writeClient.cleanHandlesGracefully();
-                    this.writeClient.close();
-                }
-                this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext(), false);
-//                this.executor = NonThrownExecutor.builder(LOG).build();
-            }
+            this.latestConf = (Configuration) value;
         }
     }
 
     @Override
     public void snapshotState(FunctionSnapshotContext context) throws Exception {
-        if (this.writeClient != null) {
-            if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED) && !isCleaning) {
-                try {
-                    this.writeClient.startAsyncCleaning();
-                    this.isCleaning = true;
-                } catch (Throwable throwable) {
-                    // catch the exception to not affect the normal checkpointing
-                    LOG.warn("Error while start async cleaning", throwable);
-                }
+        if (!this.conf.equals(this.latestConf)) {
+            this.writeClient.cleanHandlesGracefully();
+            this.writeClient.close();
+            this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
+        }
+        if (conf.getBoolean(FlinkOptions.CLEAN_ASYNC_ENABLED) && !isCleaning) {
+            try {
+                this.writeClient.startAsyncCleaning();
+                this.isCleaning = true;
+            } catch (Throwable throwable) {
+                // catch the exception to not affect the normal checkpointing
+                LOG.warn("Error while start async cleaning", throwable);
             }
         }
     }

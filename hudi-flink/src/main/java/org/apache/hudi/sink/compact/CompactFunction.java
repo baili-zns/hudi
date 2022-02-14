@@ -35,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -47,7 +48,8 @@ public class CompactFunction extends ProcessFunction<CompactionPlanEvent, Compac
     /**
      * Config options.
      */
-    private final Configuration conf;
+    private Configuration conf;
+    private Configuration latestConf;
 
     /**
      * Write Client.
@@ -92,21 +94,19 @@ public class CompactFunction extends ProcessFunction<CompactionPlanEvent, Compac
         final String instantTime = event.getCompactionInstantTime();
         final CompactionOperation compactionOperation = event.getOperation();
         if (event instanceof CompactionPlanEventEx) {
-            Configuration configuration = ((CompactionPlanEventEx) event).getConfiguration();
-            if (configuration != null && !configuration.equals(this.conf)) {
-                if (this.writeClient != null) {
-                    this.writeClient.cleanHandlesGracefully();
-                    this.writeClient.close();
-                }
-                this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
-            }
+            this.latestConf = ((CompactionPlanEventEx) event).getConfiguration();
         }
         if (asyncCompaction) {
             // executes the compaction task asynchronously to not block the checkpoint barrier propagate.
             executor.execute(
                     () -> doCompaction(instantTime, compactionOperation, collector),
 //                    (errMsg, t) -> collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), taskID)),
-                    (errMsg, t) -> collector.collect(new CompactionCommitEventEx(instantTime, compactionOperation.getFileId(), taskID, this.conf)),
+                    (errMsg, t) -> collector.collect(
+                            this.latestConf == null ?
+                                    new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), taskID) :
+                                    new CompactionCommitEventEx(instantTime, compactionOperation.getFileId(), taskID, this.conf)
+
+                    ),
                     "Execute compaction for instant %s from task %d", instantTime, taskID);
         } else {
             // executes the compaction task synchronously for batch mode.
@@ -116,6 +116,14 @@ public class CompactFunction extends ProcessFunction<CompactionPlanEvent, Compac
     }
 
     private void doCompaction(String instantTime, CompactionOperation compactionOperation, Collector<CompactionCommitEvent> collector) throws IOException {
+        if (this.latestConf != null && !this.conf.equals(this.latestConf)) {
+            this.conf = this.latestConf;
+            if (this.writeClient != null) {
+                this.writeClient.cleanHandlesGracefully();
+                this.writeClient.close();
+            }
+            this.writeClient = StreamerUtil.createWriteClient(conf, getRuntimeContext());
+        }
         HoodieFlinkMergeOnReadTableCompactor compactor = new HoodieFlinkMergeOnReadTableCompactor();
         List<WriteStatus> writeStatuses = compactor.compact(
                 new HoodieFlinkCopyOnWriteTable<>(
@@ -127,8 +135,11 @@ public class CompactFunction extends ProcessFunction<CompactionPlanEvent, Compac
                 compactionOperation,
                 instantTime,
                 writeClient.getHoodieTable().getTaskContextSupplier());
-//    collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), writeStatuses, taskID));
-        collector.collect(new CompactionCommitEventEx(instantTime, compactionOperation.getFileId(), writeStatuses, taskID, this.conf));
+        if (this.latestConf == null) {
+            collector.collect(new CompactionCommitEvent(instantTime, compactionOperation.getFileId(), writeStatuses, taskID));
+        } else {
+            collector.collect(new CompactionCommitEventEx(instantTime, compactionOperation.getFileId(), writeStatuses, taskID, this.conf));
+        }
     }
 
     @VisibleForTesting
