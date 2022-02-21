@@ -27,6 +27,7 @@ import org.apache.hudi.common.fs.FSUtils;
 import org.apache.hudi.common.model.HoodieFileFormat;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.util.Option;
+import org.apache.hudi.common.util.StringUtils;
 import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.exception.InvalidTableException;
 import org.apache.hudi.hadoop.utils.HoodieInputFormatUtils;
@@ -251,9 +252,9 @@ public class HiveSyncTool extends AbstractSyncTool {
         LOG.info("Schema difference found for " + tableName);
         hoodieHiveClient.updateTableDefinition(tableName, schema);
         // Sync the table properties if the schema has changed
-        if (cfg.tableProperties != null) {
+        if (cfg.tableProperties != null || cfg.syncAsSparkDataSourceTable) {
           hoodieHiveClient.updateTableProperties(tableName, tableProperties);
-          LOG.info("Sync table properties for " + tableName + ", table properties is: " + cfg.tableProperties);
+          LOG.info("Sync table properties for " + tableName + ", table properties is: " + tableProperties);
         }
         schemaChanged = true;
       } else {
@@ -302,6 +303,9 @@ public class HiveSyncTool extends AbstractSyncTool {
 
     Map<String, String> sparkProperties = new HashMap<>();
     sparkProperties.put("spark.sql.sources.provider", "hudi");
+    if (!StringUtils.isNullOrEmpty(cfg.sparkVersion)) {
+      sparkProperties.put("spark.sql.create.version", cfg.sparkVersion);
+    }
     // Split the schema string to multi-parts according the schemaLengthThreshold size.
     String schemaString = Parquet2SparkSchemaUtils.convertToSparkSchemaJson(reOrderedType);
     int numSchemaPart = (schemaString.length() + schemaLengthThreshold - 1) / schemaLengthThreshold;

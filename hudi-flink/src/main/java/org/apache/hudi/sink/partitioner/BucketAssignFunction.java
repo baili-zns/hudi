@@ -24,6 +24,7 @@ import org.apache.hudi.client.FlinkTaskContextSupplier;
 import org.apache.hudi.client.common.HoodieFlinkEngineContext;
 import org.apache.hudi.common.config.SerializableConfiguration;
 import org.apache.hudi.common.model.BaseAvroPayload;
+import org.apache.hudi.common.model.HoodieAvroRecord;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieRecord;
 import org.apache.hudi.common.model.HoodieRecordGlobalLocation;
@@ -82,38 +83,38 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
     private static final Logger LOG = LoggerFactory.getLogger(BucketAssignFunction.class);
 
 
-    /**
-     * Index cache(speed-up) state for the underneath file based(BloomFilter) indices.
-     * When a record came in, we do these check:
-     *
-     * <ul>
-     *   <li>Try to load all the records in the partition path where the record belongs to</li>
-     *   <li>Checks whether the state contains the record key</li>
-     *   <li>If it does, tag the record with the location</li>
-     *   <li>If it does not, use the {@link BucketAssigner} to generate a new bucket ID</li>
-     * </ul>
-     */
-    private ValueState<HoodieRecordGlobalLocation> indexState;
+  /**
+   * Index cache(speed-up) state for the underneath file based(BloomFilter) indices.
+   * When a record came in, we do these check:
+   *
+   * <ul>
+   *   <li>Try to load all the records in the partition path where the record belongs to</li>
+   *   <li>Checks whether the state contains the record key</li>
+   *   <li>If it does, tag the record with the location</li>
+   *   <li>If it does not, use the {@link BucketAssigner} to generate a new bucket ID</li>
+   * </ul>
+   */
+  private ValueState<HoodieRecordGlobalLocation> indexState;
 
-    /**
-     * Bucket assigner to assign new bucket IDs or reuse existing ones.
-     */
-    private BucketAssigner bucketAssigner;
+  /**
+   * Bucket assigner to assign new bucket IDs or reuse existing ones.
+   */
+  private BucketAssigner bucketAssigner;
 
-    private final Configuration conf;
+  private final Configuration conf;
 
-    private final boolean isChangingRecords;
+  private final boolean isChangingRecords;
 
-    /**
-     * Used to create DELETE payload.
-     */
-    private PayloadCreation payloadCreation;
+  /**
+   * Used to create DELETE payload.
+   */
+  private PayloadCreation payloadCreation;
 
-    /**
-     * If the index is global, update the index for the old partition path
-     * if same key record with different partition path came in.
-     */
-    private final boolean globalIndex;
+  /**
+   * If the index is global, update the index for the old partition path
+   * if same key record with different partition path came in.
+   */
+  private final boolean globalIndex;
 
     private RowType rowType;
     private List<String> primaryKeyColumnNames;
@@ -208,79 +209,79 @@ public class BucketAssignFunction<K, I, O extends HoodieRecord<?>>
                 this.payloadCreation = PayloadCreation.instance(this.conf);
             }
         }
-        // 1. put the record into the BucketAssigner;
-        // 2. look up the state for location, if the record has a location, just send it out;
-        // 3. if it is an INSERT, decide the location using the BucketAssigner then send it out.
-        final HoodieKey hoodieKey = record.getKey();
-        final String recordKey = hoodieKey.getRecordKey();
-        final String partitionPath = hoodieKey.getPartitionPath();
-        final HoodieRecordLocation location;
+    // 1. put the record into the BucketAssigner;
+    // 2. look up the state for location, if the record has a location, just send it out;
+    // 3. if it is an INSERT, decide the location using the BucketAssigner then send it out.
+    final HoodieKey hoodieKey = record.getKey();
+    final String recordKey = hoodieKey.getRecordKey();
+    final String partitionPath = hoodieKey.getPartitionPath();
+    final HoodieRecordLocation location;
 
-        // Only changing records need looking up the index for the location,
-        // append only records are always recognized as INSERT.
-        HoodieRecordGlobalLocation oldLoc = indexState.value();
-        if (isChangingRecords && oldLoc != null) {
-            // Set up the instant time as "U" to mark the bucket as an update bucket.
-            if (!Objects.equals(oldLoc.getPartitionPath(), partitionPath)) {
-                if (globalIndex) {
-                    // if partition path changes, emit a delete record for old partition path,
-                    // then update the index state using location with new partition path.
-                    HoodieRecord<?> deleteRecord = new HoodieRecord<>(new HoodieKey(recordKey, oldLoc.getPartitionPath()),
-                            payloadCreation.createDeletePayload((BaseAvroPayload) record.getData()));
-                    deleteRecord.setCurrentLocation(oldLoc.toLocal("U"));
-                    deleteRecord.seal();
-                    out.collect((O) deleteRecord);
-                }
-                location = getNewRecordLocation(partitionPath);
-                updateIndexState(partitionPath, location);
-            } else {
-                location = oldLoc.toLocal("U");
-                this.bucketAssigner.addUpdate(partitionPath, location.getFileId());
-            }
-        } else {
-            location = getNewRecordLocation(partitionPath);
+    // Only changing records need looking up the index for the location,
+    // append only records are always recognized as INSERT.
+    HoodieRecordGlobalLocation oldLoc = indexState.value();
+    if (isChangingRecords && oldLoc != null) {
+      // Set up the instant time as "U" to mark the bucket as an update bucket.
+      if (!Objects.equals(oldLoc.getPartitionPath(), partitionPath)) {
+        if (globalIndex) {
+          // if partition path changes, emit a delete record for old partition path,
+          // then update the index state using location with new partition path.
+          HoodieRecord<?> deleteRecord = new HoodieAvroRecord<>(new HoodieKey(recordKey, oldLoc.getPartitionPath()),
+              payloadCreation.createDeletePayload((BaseAvroPayload) record.getData()));
+          deleteRecord.setCurrentLocation(oldLoc.toLocal("U"));
+          deleteRecord.seal();
+          out.collect((O) deleteRecord);
         }
-        // always refresh the index
-        if (isChangingRecords) {
-            updateIndexState(partitionPath, location);
-        }
-        record.setCurrentLocation(location);
-        out.collect((O) record);
+        location = getNewRecordLocation(partitionPath);
+        updateIndexState(partitionPath, location);
+      } else {
+        location = oldLoc.toLocal("U");
+        this.bucketAssigner.addUpdate(partitionPath, location.getFileId());
+      }
+    } else {
+      location = getNewRecordLocation(partitionPath);
     }
+    // always refresh the index
+    if (isChangingRecords) {
+      updateIndexState(partitionPath, location);
+    }
+    record.setCurrentLocation(location);
+    out.collect((O) record);
+  }
 
-    private HoodieRecordLocation getNewRecordLocation(String partitionPath) {
-        final BucketInfo bucketInfo = this.bucketAssigner.addInsert(partitionPath);
-        final HoodieRecordLocation location;
-        switch (bucketInfo.getBucketType()) {
-            case INSERT:
-                // This is an insert bucket, use HoodieRecordLocation instant time as "I".
-                // Downstream operators can then check the instant time to know whether
-                // a record belongs to an insert bucket.
-                location = new HoodieRecordLocation("I", bucketInfo.getFileIdPrefix());
-                break;
-            case UPDATE:
-                location = new HoodieRecordLocation("U", bucketInfo.getFileIdPrefix());
-                break;
-            default:
-                throw new AssertionError();
-        }
-        return location;
+  private HoodieRecordLocation getNewRecordLocation(String partitionPath) {
+    final BucketInfo bucketInfo = this.bucketAssigner.addInsert(partitionPath);
+    final HoodieRecordLocation location;
+    switch (bucketInfo.getBucketType()) {
+      case INSERT:
+        // This is an insert bucket, use HoodieRecordLocation instant time as "I".
+        // Downstream operators can then check the instant time to know whether
+        // a record belongs to an insert bucket.
+        location = new HoodieRecordLocation("I", bucketInfo.getFileIdPrefix());
+        break;
+      case UPDATE:
+        location = new HoodieRecordLocation("U", bucketInfo.getFileIdPrefix());
+        break;
+      default:
+        throw new AssertionError();
     }
+    return location;
+  }
 
-    private void updateIndexState(
-            String partitionPath,
-            HoodieRecordLocation localLoc) throws Exception {
-        this.indexState.update(HoodieRecordGlobalLocation.fromLocal(partitionPath, localLoc));
-    }
+  private void updateIndexState(
+      String partitionPath,
+      HoodieRecordLocation localLoc) throws Exception {
+    this.indexState.update(HoodieRecordGlobalLocation.fromLocal(partitionPath, localLoc));
+  }
 
-    @Override
-    public void notifyCheckpointComplete(long checkpointId) {
-        // Refresh the table state when there are new commits.
-        this.bucketAssigner.reload(checkpointId);
-    }
+  @Override
+  public void notifyCheckpointComplete(long checkpointId) {
+    // Refresh the table state when there are new commits.
+    this.bucketAssigner.reload(checkpointId);
+  }
 
-    @Override
-    public void close() throws Exception {
-        this.bucketAssigner.close();
-    }
+  @Override
+  public void close() throws Exception {
+    this.bucketAssigner.close();
+  }
 }

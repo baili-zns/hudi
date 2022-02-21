@@ -25,23 +25,21 @@ import org.apache.hudi.common.config.HoodieConfig
 import org.apache.hudi.common.model._
 import org.apache.hudi.common.table.{HoodieTableConfig, HoodieTableMetaClient, TableSchemaResolver}
 import org.apache.hudi.common.testutils.HoodieTestDataGenerator
-import org.apache.hudi.common.util.PartitionPathEncodeUtils
 import org.apache.hudi.config.{HoodieBootstrapConfig, HoodieWriteConfig}
-import org.apache.hudi.exception.{ExceptionUtil, HoodieException}
+import org.apache.hudi.exception.HoodieException
 import org.apache.hudi.execution.bulkinsert.BulkInsertSortMode
 import org.apache.hudi.functional.TestBootstrap
 import org.apache.hudi.hive.HiveSyncConfig
 import org.apache.hudi.keygen.{ComplexKeyGenerator, NonpartitionedKeyGenerator, SimpleKeyGenerator}
 import org.apache.hudi.testutils.DataSourceTestUtils
-import org.apache.spark.SparkContext
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.api.java.JavaSparkContext
+import org.apache.spark.sql._
 import org.apache.spark.sql.functions.{expr, lit}
 import org.apache.spark.sql.hudi.HoodieSparkSessionExtension
 import org.apache.spark.sql.hudi.command.SqlKeyGenerator
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
-import org.apache.spark.sql.{DataFrame, Dataset, Row, SQLContext, SaveMode, SparkSession}
 import org.junit.jupiter.api.Assertions.{assertEquals, assertFalse, assertTrue, fail}
-import org.junit.jupiter.api.function.Executable
 import org.junit.jupiter.api.{AfterEach, BeforeEach, Test}
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.{CsvSource, EnumSource, ValueSource}
@@ -96,11 +94,17 @@ class TestHoodieSparkSqlWriter {
    * Utility method for initializing the spark context.
    */
   def initSparkContext(): Unit = {
+    val sparkConf = new SparkConf()
+    if (!HoodieSparkUtils.beforeSpark3_2()) {
+      sparkConf.set("spark.sql.catalog.spark_catalog",
+        "org.apache.spark.sql.hudi.catalog.HoodieCatalog")
+    }
     spark = SparkSession.builder()
       .appName(hoodieFooTableName)
       .master("local[2]")
       .withExtensions(new HoodieSparkSessionExtension)
       .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+      .config(sparkConf)
       .getOrCreate()
     sc = spark.sparkContext
     sc.setLogLevel("ERROR")
@@ -114,6 +118,13 @@ class TestHoodieSparkSqlWriter {
     if (sqlContext != null) {
       sqlContext.clearCache();
       sqlContext = null;
+    }
+    if (sc != null) {
+      sc.stop()
+      sc = null
+    }
+    if (spark != null) {
+      spark.close()
     }
   }
 
@@ -538,6 +549,12 @@ class TestHoodieSparkSqlWriter {
 
       // Verify that HoodieWriteClient is closed correctly
       verify(client, times(1)).close()
+
+      val ignoreResult = HoodieSparkSqlWriter.bootstrap(sqlContext, SaveMode.Ignore, fooTableModifier, spark.emptyDataFrame, Option.empty,
+        Option(client))
+      assertFalse(ignoreResult)
+      verify(client, times(2)).close()
+
       // fetch all records from parquet files generated from write to hudi
       val actualDf = sqlContext.read.parquet(tempBasePath)
       assert(actualDf.count == 100)

@@ -77,7 +77,7 @@ public class ClusteringUtils {
    * @return
    * @throws IOException
    */
-  public static Option<HoodieRequestedReplaceMetadata> getRequestedReplaceMetadata(HoodieTableMetaClient metaClient, HoodieInstant pendingReplaceInstant) throws IOException {
+  private static Option<HoodieRequestedReplaceMetadata> getRequestedReplaceMetadata(HoodieTableMetaClient metaClient, HoodieInstant pendingReplaceInstant) throws IOException {
     final HoodieInstant requestedInstant;
     if (!pendingReplaceInstant.isRequested()) {
       // inflight replacecommit files don't have clustering plan.
@@ -90,7 +90,6 @@ public class ClusteringUtils {
     Option<byte[]> content = metaClient.getActiveTimeline().getInstantDetails(requestedInstant);
     if (!content.isPresent() || content.get().length == 0) {
       // few operations create requested file without any content. Assume these are not clustering
-      LOG.warn("No content found in requested file for instant " + pendingReplaceInstant);
       return Option.empty();
     }
     return Option.of(TimelineMetadataUtils.deserializeRequestedReplaceMetadata(content.get()));
@@ -216,6 +215,12 @@ public class ClusteringUtils {
   }
 
   public static List<HoodieInstant> getPendingClusteringInstantTimes(HoodieTableMetaClient metaClient) {
-    return metaClient.getActiveTimeline().filterPendingReplaceTimeline().getInstants().collect(Collectors.toList());
+    return metaClient.getActiveTimeline().filterPendingReplaceTimeline().getInstants()
+            .filter(instant -> isPendingClusteringInstant(metaClient, instant))
+            .collect(Collectors.toList());
+  }
+
+  public static boolean isPendingClusteringInstant(HoodieTableMetaClient metaClient, HoodieInstant instant) {
+    return getClusteringPlan(metaClient, instant).isPresent();
   }
 }

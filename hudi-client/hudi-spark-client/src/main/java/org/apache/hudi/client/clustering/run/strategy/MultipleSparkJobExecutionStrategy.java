@@ -28,6 +28,7 @@ import org.apache.hudi.client.utils.ConcatenatingIterator;
 import org.apache.hudi.common.config.TypedProperties;
 import org.apache.hudi.common.engine.HoodieEngineContext;
 import org.apache.hudi.common.model.ClusteringOperation;
+import org.apache.hudi.common.model.HoodieAvroRecord;
 import org.apache.hudi.common.model.HoodieFileGroupId;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieRecord;
@@ -39,11 +40,12 @@ import org.apache.hudi.common.util.FutureUtils;
 import org.apache.hudi.common.util.Option;
 import org.apache.hudi.common.util.StringUtils;
 import org.apache.hudi.common.util.collection.Pair;
+import org.apache.hudi.config.HoodieClusteringConfig;
 import org.apache.hudi.config.HoodieWriteConfig;
 import org.apache.hudi.exception.HoodieClusteringException;
 import org.apache.hudi.exception.HoodieIOException;
 import org.apache.hudi.execution.bulkinsert.RDDCustomColumnsSortPartitioner;
-import org.apache.hudi.execution.bulkinsert.RDDSpatialCurveOptimizationSortPartitioner;
+import org.apache.hudi.execution.bulkinsert.RDDSpatialCurveSortPartitioner;
 import org.apache.hudi.io.IOUtils;
 import org.apache.hudi.io.storage.HoodieFileReader;
 import org.apache.hudi.io.storage.HoodieFileReaderFactory;
@@ -108,7 +110,6 @@ public abstract class MultipleSparkJobExecutionStrategy<T extends HoodieRecordPa
     return writeMetadata;
   }
 
-
   /**
    * Execute clustering to write inputRecords into new files as defined by rules in strategy parameters.
    * The number of new file groups created is bounded by numOutputGroups.
@@ -134,17 +135,29 @@ public abstract class MultipleSparkJobExecutionStrategy<T extends HoodieRecordPa
    * @param schema         Schema of the data including metadata fields.
    * @return {@link RDDCustomColumnsSortPartitioner} if sort columns are provided, otherwise empty.
    */
-  protected Option<BulkInsertPartitioner<T>> getPartitioner(Map<String, String> strategyParams, Schema schema) {
-    if (getWriteConfig().isLayoutOptimizationEnabled()) {
-      // sort input records by z-order/hilbert
-      return Option.of(new RDDSpatialCurveOptimizationSortPartitioner((HoodieSparkEngineContext) getEngineContext(),
-          getWriteConfig(), HoodieAvroUtils.addMetadataFields(schema)));
-    } else if (strategyParams.containsKey(PLAN_STRATEGY_SORT_COLUMNS.key())) {
-      return Option.of(new RDDCustomColumnsSortPartitioner(strategyParams.get(PLAN_STRATEGY_SORT_COLUMNS.key()).split(","),
-          HoodieAvroUtils.addMetadataFields(schema)));
-    } else {
-      return Option.empty();
-    }
+  protected Option<BulkInsertPartitioner<JavaRDD<HoodieRecord<T>>>> getPartitioner(Map<String, String> strategyParams, Schema schema) {
+    Option<String[]> orderByColumnsOpt =
+        Option.ofNullable(strategyParams.get(PLAN_STRATEGY_SORT_COLUMNS.key()))
+            .map(listStr -> listStr.split(","));
+
+    return orderByColumnsOpt.map(orderByColumns -> {
+      HoodieClusteringConfig.LayoutOptimizationStrategy layoutOptStrategy = getWriteConfig().getLayoutOptimizationStrategy();
+      switch (layoutOptStrategy) {
+        case ZORDER:
+        case HILBERT:
+          return new RDDSpatialCurveSortPartitioner(
+              (HoodieSparkEngineContext) getEngineContext(),
+              orderByColumns,
+              layoutOptStrategy,
+              getWriteConfig().getLayoutOptimizationCurveBuildMethod(),
+              HoodieAvroUtils.addMetadataFields(schema));
+        case LINEAR:
+          return new RDDCustomColumnsSortPartitioner(orderByColumns, HoodieAvroUtils.addMetadataFields(schema),
+              getWriteConfig().isConsistentLogicalTimestampEnabled());
+        default:
+          throw new UnsupportedOperationException(String.format("Layout optimization strategy '%s' is not supported", layoutOptStrategy));
+      }
+    });
   }
 
   /**
@@ -279,7 +292,7 @@ public abstract class MultipleSparkJobExecutionStrategy<T extends HoodieRecordPa
     HoodieKey hoodieKey = new HoodieKey(key, partition);
 
     HoodieRecordPayload avroPayload = new RewriteAvroPayload(record);
-    HoodieRecord hoodieRecord = new HoodieRecord(hoodieKey, avroPayload);
+    HoodieRecord hoodieRecord = new HoodieAvroRecord(hoodieKey, avroPayload);
     return hoodieRecord;
   }
 }

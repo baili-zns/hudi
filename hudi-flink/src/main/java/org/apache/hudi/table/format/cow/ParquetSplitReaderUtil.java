@@ -22,7 +22,6 @@ import org.apache.hudi.common.util.ValidationUtils;
 import org.apache.hudi.table.format.cow.vector.HeapArrayVector;
 import org.apache.hudi.table.format.cow.vector.HeapMapColumnVector;
 import org.apache.hudi.table.format.cow.vector.HeapRowColumnVector;
-import org.apache.hudi.table.format.cow.vector.VectorizedColumnBatch;
 import org.apache.hudi.table.format.cow.vector.reader.ArrayColumnReader;
 import org.apache.hudi.table.format.cow.vector.reader.MapColumnReader;
 import org.apache.hudi.table.format.cow.vector.reader.RowColumnReader;
@@ -41,6 +40,7 @@ import org.apache.flink.formats.parquet.vector.reader.TimestampColumnReader;
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.vector.ColumnVector;
+import org.apache.flink.table.data.vector.VectorizedColumnBatch;
 import org.apache.flink.table.data.vector.heap.HeapBooleanVector;
 import org.apache.flink.table.data.vector.heap.HeapByteVector;
 import org.apache.flink.table.data.vector.heap.HeapBytesVector;
@@ -58,6 +58,7 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.util.Preconditions;
 import org.apache.hadoop.conf.Configuration;
@@ -329,7 +330,7 @@ public class ParquetSplitReaderUtil {
       case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
         switch (descriptor.getPrimitiveType().getPrimitiveTypeName()) {
           case INT64:
-            return new Int64TimestampColumnReader(utcTimestamp, descriptor, pageReader);
+            return new Int64TimestampColumnReader(utcTimestamp, descriptor, pageReader, ((TimestampType)fieldType).getPrecision());
           case INT96:
             return new TimestampColumnReader(utcTimestamp, descriptor, pageReader);
           default:

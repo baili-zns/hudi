@@ -78,6 +78,7 @@ public interface HoodieTimeline extends Serializable {
   String REQUESTED_COMPACTION_SUFFIX = StringUtils.join(COMPACTION_ACTION, REQUESTED_EXTENSION);
   String REQUESTED_COMPACTION_EXTENSION = StringUtils.join(".", REQUESTED_COMPACTION_SUFFIX);
   String INFLIGHT_COMPACTION_EXTENSION = StringUtils.join(".", COMPACTION_ACTION, INFLIGHT_EXTENSION);
+  String REQUESTED_RESTORE_EXTENSION = "." + RESTORE_ACTION + REQUESTED_EXTENSION;
   String INFLIGHT_RESTORE_EXTENSION = "." + RESTORE_ACTION + INFLIGHT_EXTENSION;
   String RESTORE_EXTENSION = "." + RESTORE_ACTION;
   String INFLIGHT_REPLACE_COMMIT_EXTENSION = "." + REPLACE_COMMIT_ACTION + INFLIGHT_EXTENSION;
@@ -130,14 +131,6 @@ public interface HoodieTimeline extends Serializable {
    * @return New instance of HoodieTimeline with just completed instants
    */
   HoodieTimeline filterCompletedAndCompactionInstants();
-
-  /**
-   * Filter this timeline to include the completed and exclude operation type is delete partition instants.
-   *
-   * @return New instance of HoodieTimeline with include the completed and
-   * exclude operation type is delete partition instants
-   */
-  HoodieTimeline filterCompletedInstantsWithCommitMetadata();
 
   /**
    * Timeline to just include commits (commit/deltacommit), compaction and replace actions.
@@ -292,11 +285,6 @@ public interface HoodieTimeline extends Serializable {
   boolean isEmpty(HoodieInstant instant);
 
   /**
-   * Check WriteOperationType is DeletePartition.
-   */
-  boolean isDeletePartitionType(HoodieInstant instant);
-
-  /**
    * Helper methods to compare instants.
    **/
   BiPredicate<String, String> EQUALS = (commit1, commit2) -> commit1.compareTo(commit2) == 0;
@@ -397,6 +385,10 @@ public interface HoodieTimeline extends Serializable {
 
   static String makeRequestedRollbackFileName(String instant) {
     return StringUtils.join(instant, HoodieTimeline.REQUESTED_ROLLBACK_EXTENSION);
+  }
+
+  static String makeRequestedRestoreFileName(String instant) {
+    return StringUtils.join(instant, HoodieTimeline.REQUESTED_RESTORE_EXTENSION);
   }
 
   static String makeInflightRollbackFileName(String instant) {

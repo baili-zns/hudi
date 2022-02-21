@@ -20,6 +20,7 @@ package org.apache.hudi.sink.transform;
 
 import cn.hutool.core.util.StrUtil;
 import com.hito.econ.flink.common.model.RowDataWithSchema;
+import org.apache.hudi.common.model.HoodieAvroRecord;
 import org.apache.hudi.common.model.HoodieKey;
 import org.apache.hudi.common.model.HoodieOperation;
 import org.apache.hudi.common.model.HoodieRecord;
@@ -52,75 +53,71 @@ import static org.apache.hudi.util.StreamerUtil.flinkConf2TypedProperties;
  * Function that transforms RowData to HoodieRecord.
  */
 public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
-        extends RichMapFunction<I, O> {
-    /**
-     * Row type of the input.
-     */
+    extends RichMapFunction<I, O> {
+  /**
+   * Row type of the input.
+   */
     private RowType rowType;
     private List<String> primaryKeyColumnNames;
 
-    /**
-     * Avro schema of the input.
-     */
-    private transient Schema avroSchema;
+  /**
+   * Avro schema of the input.
+   */
+  private transient Schema avroSchema;
 
-    /**
-     * RowData to Avro record converter.
-     */
-    private transient RowDataToAvroConverters.RowDataToAvroConverter converter;
+  /**
+   * RowData to Avro record converter.
+   */
+  private transient RowDataToAvroConverters.RowDataToAvroConverter converter;
 
-    /**
-     * HoodieKey generator.
-     */
-    private transient KeyGenerator keyGenerator;
+  /**
+   * HoodieKey generator.
+   */
+  private transient KeyGenerator keyGenerator;
 
-    /**
-     * Utilities to create hoodie pay load instance.
-     */
-    private transient PayloadCreation payloadCreation;
+  /**
+   * Utilities to create hoodie pay load instance.
+   */
+  private transient PayloadCreation payloadCreation;
 
-    /**
-     * Config options.
-     */
-    private final Configuration config;
+  /**
+   * Config options.
+   */
+  private final Configuration config;
 
-    public RowDataToHoodieFunction(RowType rowType, Configuration config) {
-        this.rowType = rowType;
-        this.config = config;
-    }
+  public RowDataToHoodieFunction(RowType rowType, Configuration config) {
+    this.rowType = rowType;
+    this.config = config;
+  }
 
     private static final Logger LOG = LoggerFactory.getLogger(RowDataToHoodieFunction.class);
 
-    @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
-        try {
-            this.avroSchema = StreamerUtil.getSourceSchema(this.config);
-            this.converter = RowDataToAvroConverters.createConverter(this.rowType);
-            this.keyGenerator =
-                    HoodieAvroKeyGeneratorFactory
-                            .createKeyGenerator(flinkConf2TypedProperties(FlinkOptions.flatOptions(this.config)));
-            this.payloadCreation = PayloadCreation.instance(config);
-        } catch (HoodieException e) {
-            LOG.info("初始化writeClient失败,稍后根据数据进行初始化");
-        }
-    }
+  @Override
+  public void open(Configuration parameters) throws Exception {
+    super.open(parameters);
+    this.avroSchema = StreamerUtil.getSourceSchema(this.config);
+    this.converter = RowDataToAvroConverters.createConverter(this.rowType);
+    this.keyGenerator =
+        HoodieAvroKeyGeneratorFactory
+            .createKeyGenerator(flinkConf2TypedProperties(this.config));
+    this.payloadCreation = PayloadCreation.instance(config);
+  }
 
-    @SuppressWarnings("unchecked")
-    @Override
-    public O map(I i) throws Exception {
-        return (O) toHoodieRecord(i);
-    }
+  @SuppressWarnings("unchecked")
+  @Override
+  public O map(I i) throws Exception {
+    return (O) toHoodieRecord(i);
+  }
 
-    /**
-     * Converts the give record to a {@link HoodieRecord}.
-     *
-     * @param record The input record
-     * @return HoodieRecord based on the configuration
-     * @throws IOException if error occurs
-     */
-    @SuppressWarnings("rawtypes")
-    private HoodieRecord toHoodieRecord(I record) throws Exception {
+  /**
+   * Converts the give record to a {@link HoodieRecord}.
+   *
+   * @param record The input record
+   * @return HoodieRecord based on the configuration
+   * @throws IOException if error occurs
+   */
+  @SuppressWarnings("rawtypes")
+  private HoodieRecord toHoodieRecord(I record) throws Exception {
         HoodieOperation operation = HoodieOperation.fromValue(record.getRowKind().toByteValue());
         if (record instanceof RowDataWithSchema) {
             RowDataWithSchema rowDataWithSchema = (RowDataWithSchema) record;
@@ -147,5 +144,7 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
         HoodieRecordPayload payload = payloadCreation.createPayload(gr);
         final HoodieKey hoodieKey = keyGenerator.getKey(gr);
         return new HoodieRecord<>(hoodieKey, payload, operation);
-    }
+    HoodieOperation operation = HoodieOperation.fromValue(record.getRowKind().toByteValue());
+    return new HoodieAvroRecord<>(hoodieKey, payload, operation);
+  }
 }

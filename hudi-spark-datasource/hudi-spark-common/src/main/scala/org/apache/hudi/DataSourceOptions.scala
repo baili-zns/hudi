@@ -23,7 +23,7 @@ import org.apache.hudi.common.fs.ConsistencyGuardConfig
 import org.apache.hudi.common.model.{HoodieTableType, WriteOperationType}
 import org.apache.hudi.common.table.HoodieTableConfig
 import org.apache.hudi.common.util.Option
-import org.apache.hudi.config.HoodieWriteConfig
+import org.apache.hudi.config.{HoodieClusteringConfig, HoodieWriteConfig}
 import org.apache.hudi.hive.util.ConfigUtils
 import org.apache.hudi.hive.{HiveStylePartitionValueExtractor, HiveSyncTool, MultiPartKeysValueExtractor, NonPartitionedExtractor, SlashEncodedDayPartitionValueExtractor}
 import org.apache.hudi.keygen.constant.KeyGeneratorOptions
@@ -75,6 +75,7 @@ object DataSourceReadOptions {
   val ENABLE_HOODIE_FILE_INDEX: ConfigProperty[Boolean] = ConfigProperty
     .key("hoodie.file.index.enable")
     .defaultValue(true)
+    .deprecatedAfter("0.11.0")
     .withDocumentation("Enables use of the spark file index implementation for Hudi, "
       + "that speeds up listing of large tables.")
 
@@ -119,8 +120,13 @@ object DataSourceReadOptions {
     .key("hoodie.enable.data.skipping")
     .defaultValue(true)
     .sinceVersion("0.10.0")
-    .withDocumentation("enable data skipping to boost query after doing z-order optimize for current table")
+    .withDocumentation("Enables data-skipping allowing queries to leverage indexes to reduce the search space by " +
+      "skipping over files")
 
+  val INCREMENTAL_FALLBACK_TO_FULL_TABLE_SCAN_FOR_NON_EXISTING_FILES: ConfigProperty[String] = ConfigProperty
+    .key("hoodie.datasource.read.incr.fallback.fulltablescan.enable")
+    .defaultValue("false")
+    .withDocumentation("When doing an incremental query whether we should fall back to full table scans if file does not exist.")
   /** @deprecated Use {@link QUERY_TYPE} and its methods instead */
   @Deprecated
   val QUERY_TYPE_OPT_KEY = QUERY_TYPE.key()
@@ -300,6 +306,8 @@ object DataSourceWriteOptions {
     .withInferFunction(keyGeneraterInferFunc)
     .withDocumentation("Key generator class, that implements `org.apache.hudi.keygen.KeyGenerator`")
 
+  val KEYGENERATOR_CONSISTENT_LOGICAL_TIMESTAMP_ENABLED: ConfigProperty[String] = KeyGeneratorOptions.KEYGENERATOR_CONSISTENT_LOGICAL_TIMESTAMP_ENABLED
+
   val ENABLE_ROW_WRITER: ConfigProperty[String] = ConfigProperty
     .key("hoodie.datasource.write.row.writer.enable")
     .defaultValue("true")
@@ -420,6 +428,11 @@ object DataSourceWriteOptions {
   val HIVE_URL: ConfigProperty[String] = ConfigProperty
     .key("hoodie.datasource.hive_sync.jdbcurl")
     .defaultValue("jdbc:hive2://localhost:10000")
+    .withDocumentation("Hive jdbc url")
+
+  val METASTORE_URIS: ConfigProperty[String] = ConfigProperty
+    .key("hoodie.datasource.hive_sync.metastore.uris")
+    .defaultValue("thrift://localhost:9083")
     .withDocumentation("Hive metastore url")
 
   val hivePartitionFieldsInferFunc = DataSourceOptionsHelper.scalaFunctionToJavaFunction((p: HoodieConfig) => {
@@ -495,6 +508,16 @@ object DataSourceWriteOptions {
     .withDocumentation("‘INT64’ with original type TIMESTAMP_MICROS is converted to hive ‘timestamp’ type. " +
       "Disabled by default for backward compatibility.")
 
+  /**
+   * Flag to indicate whether to use conditional syncing in HiveSync.
+   * If set true, the Hive sync procedure will only run if partition or schema changes are detected.
+   * By default true.
+   */
+  val HIVE_CONDITIONAL_SYNC: ConfigProperty[String] = ConfigProperty
+    .key("hoodie.datasource.hive_sync.conditional_sync")
+    .defaultValue("false")
+    .withDocumentation("Enables conditional hive sync, where partition or schema change must exist to perform sync to hive.")
+
   val HIVE_TABLE_PROPERTIES: ConfigProperty[String] = ConfigProperty
     .key("hoodie.datasource.hive_sync.table_properties")
     .noDefaultValue()
@@ -538,17 +561,9 @@ object DataSourceWriteOptions {
     .defaultValue("true")
     .withDocumentation("Controls whether async compaction should be turned on for MOR table writing.")
 
-  val INLINE_CLUSTERING_ENABLE: ConfigProperty[String] = ConfigProperty
-    .key("hoodie.datasource.clustering.inline.enable")
-    .defaultValue("false")
-    .sinceVersion("0.9.0")
-    .withDocumentation("Enable inline clustering. Disabled by default.")
+  val INLINE_CLUSTERING_ENABLE = HoodieClusteringConfig.INLINE_CLUSTERING
 
-  val ASYNC_CLUSTERING_ENABLE: ConfigProperty[String] = ConfigProperty
-    .key("hoodie.datasource.clustering.async.enable")
-    .defaultValue("false")
-    .sinceVersion("0.9.0")
-    .withDocumentation("Enable asynchronous clustering. Disabled by default.")
+  val ASYNC_CLUSTERING_ENABLE = HoodieClusteringConfig.ASYNC_CLUSTERING_ENABLE
 
   val KAFKA_AVRO_VALUE_DESERIALIZER_CLASS: ConfigProperty[String] = ConfigProperty
     .key("hoodie.deltastreamer.source.kafka.value.deserializer.class")
@@ -620,10 +635,10 @@ object DataSourceWriteOptions {
   @Deprecated
   val HIVE_PARTITION_EXTRACTOR_CLASS_OPT_KEY = HIVE_PARTITION_EXTRACTOR_CLASS.key()
 
-  /** @deprecated Use {@link KEYGENERATOR_CLASS} and its methods instead */
+  /** @deprecated Use {@link KEYGENERATOR_CLASS_NAME} and its methods instead */
   @Deprecated
   val DEFAULT_KEYGENERATOR_CLASS_OPT_VAL = KEYGENERATOR_CLASS_NAME.defaultValue()
-  /** @deprecated Use {@link KEYGENERATOR_CLASS} and its methods instead */
+  /** @deprecated Use {@link KEYGENERATOR_CLASS_NAME} and its methods instead */
   @Deprecated
   val KEYGENERATOR_CLASS_OPT_KEY = HoodieWriteConfig.KEYGENERATOR_CLASS_NAME.key()
   /** @deprecated Use {@link ENABLE_ROW_WRITER} and its methods instead */
