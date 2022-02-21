@@ -83,7 +83,7 @@ public class S3EventsMetaSelector extends CloudObjectsSelector {
    * @param processedMessages array of processed messages to add more messages
    * @return the filtered list of valid S3 events in SQS.
    */
-  protected List<Map<String, Object>> getValidEvents(AmazonSQS sqs, List<Message> processedMessages) throws IOException {
+  protected List<Map<String, Object>> getValidEvents(AmazonSQS sqs, List<Message> processedMessages) throws Exception {
     List<Message> messages =
         getMessagesToProcess(
             sqs,
@@ -96,7 +96,7 @@ public class S3EventsMetaSelector extends CloudObjectsSelector {
   }
 
   private List<Map<String, Object>> processAndDeleteInvalidMessages(List<Message> processedMessages,
-                                                                    List<Message> messages) throws IOException {
+                                                                    List<Message> messages) throws Exception {
     List<Map<String, Object>> validEvents = new ArrayList<>();
     for (Message message : messages) {
       JSONObject messageBody = new JSONObject(message.getBody());
@@ -154,7 +154,7 @@ public class S3EventsMetaSelector extends CloudObjectsSelector {
         filteredEventRecords.add(new ObjectMapper().writeValueAsString(eventRecord).replace("%3D", "="));
       }
       return new ImmutablePair<>(filteredEventRecords, String.valueOf(newCheckpointTime));
-    } catch (JSONException | IOException e) {
+    } catch (Exception e) {
       throw new HoodieException("Unable to read from SQS: ", e);
     }
   }

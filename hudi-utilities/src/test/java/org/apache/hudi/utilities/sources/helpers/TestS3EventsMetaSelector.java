@@ -78,7 +78,7 @@ public class TestS3EventsMetaSelector extends HoodieClientTestHarness {
 
   @ParameterizedTest
   @ValueSource(classes = {S3EventsMetaSelector.class})
-  public void testNextEventsFromQueueShouldReturnsEventsFromQueue(Class<?> clazz) {
+  public void testNextEventsFromQueueShouldReturnsEventsFromQueue(Class<?> clazz) throws Exception{
     S3EventsMetaSelector selector = (S3EventsMetaSelector) ReflectionUtils.loadClass(clazz.getName(), props);
     // setup s3 record
     String bucket = "test-bucket";
