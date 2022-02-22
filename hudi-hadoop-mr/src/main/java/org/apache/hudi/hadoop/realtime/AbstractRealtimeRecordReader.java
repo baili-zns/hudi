@@ -110,7 +110,9 @@ public abstract class AbstractRealtimeRecordReader {
     // TODO(vc): In the future, the reader schema should be updated based on log files & be able
     // to null out fields not present before
 
-    readerSchema = HoodieRealtimeRecordReaderUtils.generateProjectionSchema(writerSchema, schemaFieldsMap, projectionFields);
+//    readerSchema = HoodieRealtimeRecordReaderUtils.generateProjectionSchema(writerSchema, schemaFieldsMap, projectionFields);
+    readerSchema = HoodieRealtimeRecordReaderUtils.generateProjectionSchema(writerSchema, schemaFieldsMap, projectionFields,
+            jobConf.get("schema.evolution.columns"), jobConf.get("schema.evolution.columns.types"));
     LOG.info(String.format("About to read compacted logs %s for base split %s, projecting cols %s",
         split.getDeltaLogPaths(), split.getPath(), projectionFields));
   }

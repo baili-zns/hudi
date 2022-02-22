@@ -51,13 +51,7 @@ import org.apache.log4j.Logger;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class HoodieRealtimeRecordReaderUtils {
@@ -145,6 +139,69 @@ public class HoodieRealtimeRecordReaderUtils {
         writeSchema.getNamespace(), writeSchema.isError());
     projectedSchema.setFields(projectedFields);
     return projectedSchema;
+  }
+
+  public static Schema generateProjectionSchema(Schema writeSchema, Map<String, Schema.Field> schemaFieldsMap,
+                                                List<String> fieldNames, String csColumns, String csColumnTypes) {
+    /**
+     * ...
+     */
+    List<Schema.Field> projectedFields = new ArrayList<>();
+    Map<String, Schema.Field> fieldMap = getFieldMap(csColumns, csColumnTypes);
+    for (String fn : fieldNames) {
+      Schema.Field field = schemaFieldsMap.get(fn.toLowerCase());
+      if (field == null) {
+//        throw new HoodieException("Field " + fn + " not found in log schema. Query cannot proceed! "
+//            + "Derived Schema Fields: " + new ArrayList<>(schemaFieldsMap.keySet()));
+        projectedFields.add(fieldMap.get(fn));
+      } else {
+        projectedFields.add(new Schema.Field(field.name(), field.schema(), field.doc(), field.defaultVal()));
+      }
+    }
+
+    Schema projectedSchema = Schema.createRecord(writeSchema.getName(), writeSchema.getDoc(),
+            writeSchema.getNamespace(), writeSchema.isError());
+    projectedSchema.setFields(projectedFields);
+    return projectedSchema;
+  }
+
+  private static Map<String, Schema.Field> getFieldMap(String csColumns, String csColumnTypes) {
+    LOG.info(String.format("columns:%s\ntypes:%s", csColumns, csColumnTypes));
+    Map<String, Schema.Field> result = new HashMap<>();
+    String[] columns = csColumns.split(",");
+    String[] types = csColumnTypes.split(",");
+    for (int i = 0; i < columns.length; i++) {
+      String columnName = columns[i];
+      result.put(columnName, new Schema.Field(columnName,toSchema(types[i]), null, null));
+    }
+    return result;
+  }
+
+  private static Schema toSchema(String hiveSqlType) {
+    switch (hiveSqlType.toLowerCase()) {
+      case "boolean":
+        return Schema.create(Schema.Type.BOOLEAN);
+      case "byte":
+      case "short":
+      case "integer":
+        return Schema.create(Schema.Type.INT);
+      case "long":
+        return Schema.create(Schema.Type.LONG);
+      case "float":
+        return Schema.create(Schema.Type.FLOAT);
+      case "double":
+      case "decimal":
+        return Schema.create(Schema.Type.DOUBLE);
+      case "binary":
+        return Schema.create(Schema.Type.BYTES);
+      case "string":
+      case "char":
+      case "varchar":
+      case "date":
+      case "timestamp":
+      default:
+        return Schema.create(Schema.Type.STRING);
+    }
   }
 
   public static Map<String, Schema.Field> getNameToFieldMap(Schema schema) {
