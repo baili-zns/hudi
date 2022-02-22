@@ -143,8 +143,6 @@ public class RowDataToHoodieFunction<I extends RowData, O extends HoodieRecord>
         GenericRecord gr = (GenericRecord) this.converter.convert(this.avroSchema, record);
         HoodieRecordPayload payload = payloadCreation.createPayload(gr);
         final HoodieKey hoodieKey = keyGenerator.getKey(gr);
-        return new HoodieRecord<>(hoodieKey, payload, operation);
-    HoodieOperation operation = HoodieOperation.fromValue(record.getRowKind().toByteValue());
-    return new HoodieAvroRecord<>(hoodieKey, payload, operation);
+        return new HoodieAvroRecord<>(hoodieKey, payload, operation);
   }
 }

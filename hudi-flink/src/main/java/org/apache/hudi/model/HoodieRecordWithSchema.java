@@ -2,10 +2,7 @@ package org.apache.hudi.model;
 
 import com.hito.econ.flink.common.model.RowDataWithSchema;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.hudi.common.model.HoodieKey;
-import org.apache.hudi.common.model.HoodieOperation;
-import org.apache.hudi.common.model.HoodieRecord;
-import org.apache.hudi.common.model.HoodieRecordPayload;
+import org.apache.hudi.common.model.*;
 
 import java.util.List;
 
@@ -15,7 +12,7 @@ import java.util.List;
  * @author: zns
  * @create: 2022-01-19 16:09
  */
-public class HoodieRecordWithSchema<T extends HoodieRecordPayload> extends HoodieRecord {
+public class HoodieRecordWithSchema<T extends HoodieRecordPayload> extends HoodieAvroRecord {
     private RowType rowType;
     private List<String> primaryKeyColumnNames;
 

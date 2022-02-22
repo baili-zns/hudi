@@ -255,13 +255,13 @@ public class StreamWriteFunction<I> extends AbstractStreamWriteFunction<I> {
       return new DataItem(
           record.getRecordKey(),
           record.getCurrentLocation().getInstantTime(),
-          record.getData(),
+              (HoodieRecordPayload<?>) record.getData(),
           record.getOperation());
     }
 
     public HoodieRecord<?> toHoodieRecord(String partitionPath) {
       HoodieKey hoodieKey = new HoodieKey(this.key, partitionPath);
-      HoodieRecord<?> record = new HoodieRecord<>(hoodieKey, data, operation);
+      HoodieRecord<?> record = new HoodieAvroRecord<>(hoodieKey, data, operation);
       HoodieRecordLocation loc = new HoodieRecordLocation(instant, null);
       record.setCurrentLocation(loc);
       return record;

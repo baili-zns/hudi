@@ -239,7 +239,7 @@ public class StreamWriteOperatorCoordinator
             // start new instant.
             startInstant();
             // sync Hive if is enabled
-            syncHiveIfEnabled();
+            syncHive();
           }
         }, "commits the instant %s", this.instant
     );
@@ -397,11 +397,11 @@ public class StreamWriteOperatorCoordinator
       // caller, which is a AppClassLoader.
       Thread.currentThread().setContextClassLoader(getClass().getClassLoader());
       // sync Hive if is enabled in batch mode.
-      syncHiveIfEnabled();
+      syncHive();
     }
   }
 
-  private void handleWriteMetaEvent(WriteMetadataEvent event) {
+  private void handleWriteMetaEvent(WriteMetadataEvent event) throws IOException {
     // the write task does not block after checkpointing(and before it receives a checkpoint success event),
     // if it checkpoints succeed then flushes the data buffer again before this coordinator receives a checkpoint
     // success event, the data buffer would flush with an older instant time.
