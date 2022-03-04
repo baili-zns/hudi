@@ -36,7 +36,8 @@
     <javax.servlet.version>3.1.0</javax.servlet.version>
     <!-- override to be same with flink 1.12.2 -->
     <parquet.version>1.11.1</parquet.version>
-    <hive.version>2.3.1</hive.version>
+    <hive.version>2.1.1-cdh6.2.1</hive.version>
+<!--    <hive.version>2.3.1</hive.version>-->
     <thrift.version>0.9.3</thrift.version>
   </properties>
 
@@ -623,6 +624,21 @@
       <id>flink-bundle-shade-hive2</id>
       <properties>
         <hive.version>2.3.1</hive.version>
+        <flink.bundle.hive.scope>compile</flink.bundle.hive.scope>
+      </properties>
+      <dependencies>
+        <dependency>
+          <groupId>${hive.groupid}</groupId>
+          <artifactId>hive-service-rpc</artifactId>
+          <version>${hive.version}</version>
+          <scope>${flink.bundle.hive.scope}</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>flink-bundle-shade-cdh</id>
+      <properties>
+        <hive.version>2.1.1-cdh6.2.1</hive.version>
         <flink.bundle.hive.scope>compile</flink.bundle.hive.scope>
       </properties>
       <dependencies>
